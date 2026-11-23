@@ -283,12 +283,14 @@ def canslim(e, f, rs):
     """満たした文字を返す（判定できない文字は None）。基準は O'Neil の目安。"""
     out = {}
     out["C"] = None if f.get("qEpsYoY") is None else f["qEpsYoY"] >= 25
-    eps = [v for _, v in f.get("epsAnnual") or [] if v is not None]
-    if len(eps) >= 3 and all(x > 0 for x in eps[-3:]):
-        g = [(eps[i] / eps[i - 1] - 1) * 100 for i in range(1, len(eps))]
-        out["A"] = all(x >= 20 for x in g[-2:]) and (eps[-1] / eps[0]) ** (1 / (len(eps) - 1)) - 1 >= 0.20
+    eps = [v for _, v in f.get("epsAnnual") or [] if v is not None][-3:]
+    if len(eps) < 3:
+        out["A"] = None
+    elif all(x > 0 for x in eps):   # 直近 3 期とも黒字のときだけ伸び率を計算（赤字をはさむと率が意味をなさない）
+        g = [(eps[i] / eps[i - 1] - 1) * 100 for i in (1, 2)]
+        out["A"] = all(x >= 20 for x in g) and (eps[2] / eps[0]) ** 0.5 - 1 >= 0.20
     else:
-        out["A"] = None if len(eps) < 3 else False
+        out["A"] = False
     out["N"] = e["fromHigh"] >= -5
     out["S"] = bool(e["breakout"] or (e["volRatio"] or 0) >= 1.4)
     out["L"] = rs is not None and rs >= 80
@@ -368,7 +370,11 @@ def run(prices=None, fundamentals_fn=None):
             it["spark"] = {k: [r((x / base - 1) * 100) for x in sr.iloc[-120:].values]
                            for k, sr in (("c", cl), ("m50", m50), ("m150", m150), ("m200", m200))}
             it["fund"] = {k: f.get(k) for k in ("qEpsYoY", "qRevYoY", "inst", "roe", "epsAnnual", "epsQuarter")}
-            it["cs"] = canslim(e, f, e["rs"])
+            try:
+                it["cs"] = canslim(e, f, e["rs"])
+            except Exception as ex:   # 決算データの形が想定外でも全体は止めない
+                log(f"  {c} CAN-SLIM 判定できず", ex)
+                it["cs"] = {}
             it["new"] = n == 8 and c not in prev_pass
         items.append(it)
     items.sort(key=lambda i: (-i["ttPass"], -(i["rs"] or 0)))
