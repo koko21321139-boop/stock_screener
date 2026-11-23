@@ -26,7 +26,7 @@
   .market b { font-size:16px; }
   .tabs { display:flex; gap:6px; margin:10px 0; }
   .tabs button { flex:1; border:1px solid var(--line); background:var(--card); color:var(--fg);
-                 border-radius:10px; padding:8px 4px; font-size:14px; }
+                 border-radius:10px; padding:8px 2px; font-size:13px; white-space:nowrap; }
   .tabs button.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
           padding:10px 12px; margin-bottom:8px; }
@@ -74,6 +74,7 @@
   <button data-f="zone" class="on">戻り売り</button>
   <button data-f="all">全条件</button>
   <button data-f="near">あと一歩</button>
+  <button data-f="tr">3→4移行</button>
   <button data-f="sector">業種</button>
 </div>
 <div id="list"></div>
@@ -114,6 +115,45 @@ function sectorView() {
     <p class="note" style="margin-top:8px">業種内で、株価が下向きの150日線（30週線）の下にある銘柄の割合です。赤は${th}%以上の弱い業種。ワインスタインは「弱い業種の弱い銘柄を売る」ことを重視しました。</p></div>`;
 }
 
+// ステージ3→4移行：割れたばかりの150日線（30週線）への戻りを売る
+function trPlan(s) {
+  let st;
+  if (s.close < s.tr_entry_lo) st = `戻り待ち：あと${((s.tr_entry_lo / s.close - 1) * 100).toFixed(1)}%戻したら売りゾーン（150日線への戻り）`;
+  else if (s.close <= s.tr_entry_hi) st = "売りゾーン内：150日線への戻り売りのタイミング";
+  else st = "150日線の上に戻った：見送り（ステージ3継続の可能性）";
+  return `<div class="plan">
+    <span class="sell">売り<b>${yen(s.tr_entry_lo)}〜${yen(s.tr_entry_hi)}</b></span>
+    <span class="cut">損切り<b>${yen(s.tr_stop)}</b></span>
+    <span>利確目安<b>${yen(s.tr_target)}</b></span>
+    <span class="st">${st}。戻りを待たない場合は ${yen(s.breakdown)} 割れで売り</span></div>`;
+}
+
+function trCard(s, conds) {
+  const tags = [];
+  if (s.tr_pass) tags.push('<span class="tag t-red">全条件</span>');
+  if (s.c11) tags.push(`<span class="tag t-sec">弱い業種 ${s.sector_stage4_pct}%</span>`);
+  if (s.c12) tags.push(`<span class="tag t-sec">売り抜け ${s.ud_ratio}</span>`);
+  if (s.earnings_soon) tags.push(`<span class="tag t-warn">⚠ 決算 ${md(s.earnings_date)}</span>`);
+  if (s.exdiv_soon) tags.push(`<span class="tag t-warn">⚠ 権利落ち ${md(s.exdiv_date)}</span>`);
+  const checks = Object.entries(conds).map(([k, label]) =>
+    `<li class="${s[k] ? "ok" : "ng"}">${s[k] ? "✓" : "–"} ${label}</li>`).join("");
+  return `<div class="card">
+    <div class="row1"><div><span class="name">${s.name}</span><span class="code">${s.code}</span></div>
+      <div class="price">${s.close.toLocaleString()}</div></div>
+    <div class="tags">${tags.join("")}<span class="tag" style="color:var(--sub)">${s.sector}</span></div>
+    <div class="nums">
+      <span>高値比 <b>${s.drawdown_pct}%</b></span>
+      <span>150日線 <b>${s.dist_150ma_pct > 0 ? "+" : ""}${s.dist_150ma_pct}%</b></span>
+      <span>RS <b>${s.rs_prev}→${s.rs}</b></span>
+      <span>代金 <b>${s.turnover_oku}億</b></span>
+      <span>条件 <b>${s.tr_score}/${Object.keys(conds).length}</b></span>
+      <span></span>
+    </div>
+    ${trPlan(s)}
+    <details><summary>条件の内訳</summary><ul style="padding:0;margin:4px 0">${checks}</ul></details>
+  </div>`;
+}
+
 function card(s, conds) {
   const tags = [];
   if (s.all_pass) tags.push('<span class="tag t-red">全条件</span>');
@@ -144,6 +184,12 @@ function card(s, conds) {
 function render() {
   if (!DATA) return;
   if (FILTER === "sector") { $("#list").innerHTML = sectorView(); return; }
+  if (FILTER === "tr") {
+    const ts = DATA.transition || [];
+    $("#list").innerHTML = `<p class="note" style="margin:0 2px 8px">天井圏（ステージ3）から下降（ステージ4）に入りかけの銘柄です。ステージ4タブより早い売り場ですが、ステージ3に戻る（もう一度上がる）こともあるので、損切りは必ず守る前提で。</p>`
+      + (ts.length ? ts.map((s) => trCard(s, DATA.tr_conditions)).join("") : '<div class="empty">該当なし</div>');
+    return;
+  }
   const total = Object.keys(DATA.conditions).length;
   let xs = DATA.stocks;
   if (FILTER === "zone") xs = xs.filter((s) => s.rally_zone && s.score >= total - 2);
