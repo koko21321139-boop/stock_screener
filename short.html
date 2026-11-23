@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#7f1d1d">
+<link rel="manifest" href="manifest.webmanifest">
+<title>ショート候補（Stage 4）</title>
+<style>
+  :root { --bg:#f7f7f8; --card:#fff; --fg:#1b1b1f; --sub:#6b6b75; --line:#e4e4e8;
+          --red:#b42318; --redbg:#fde8e6; --amber:#9a6700; --amberbg:#fff4d6; --green:#1a7f37; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111114; --card:#1c1c21; --fg:#ececf1; --sub:#9a9aa6; --line:#2c2c33;
+            --red:#ff7b72; --redbg:#3a1816; --amber:#e3b341; --amberbg:#332a10; --green:#56d364; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+         padding:env(safe-area-inset-top) 12px 40px; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:12px 2px 4px; }
+  h1 { font-size:20px; margin:0; }
+  a.back { color:var(--sub); text-decoration:none; font-size:14px; }
+  .meta { color:var(--sub); font-size:13px; margin:0 2px 10px; }
+  .market { background:var(--card); border:1px solid var(--line); border-radius:12px;
+            padding:10px 12px; margin-bottom:10px; }
+  .market b { font-size:16px; }
+  .tabs { display:flex; gap:6px; margin:10px 0; }
+  .tabs button { flex:1; border:1px solid var(--line); background:var(--card); color:var(--fg);
+                 border-radius:10px; padding:8px 4px; font-size:14px; }
+  .tabs button.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:10px 12px; margin-bottom:8px; }
+  .row1 { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+  .name { font-weight:600; }
+  .code { color:var(--sub); font-size:13px; margin-left:4px; }
+  .price { font-variant-numeric:tabular-nums; font-weight:600; }
+  .tags { margin:4px 0; display:flex; flex-wrap:wrap; gap:4px; }
+  .tag { font-size:12px; padding:1px 7px; border-radius:999px; }
+  .t-red { background:var(--redbg); color:var(--red); }
+  .t-amb { background:var(--amberbg); color:var(--amber); }
+  .nums { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; font-size:13px; color:var(--sub); }
+  .nums span b { color:var(--fg); font-variant-numeric:tabular-nums; }
+  details { margin-top:6px; font-size:13px; }
+  details li { list-style:none; }
+  .ok { color:var(--green); } .ng { color:var(--sub); }
+  .empty { color:var(--sub); text-align:center; padding:30px 0; }
+  .note { color:var(--sub); font-size:12px; margin-top:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ショート候補</h1>
+  <a class="back" href="./">← ロング</a>
+</header>
+<div class="meta" id="meta">読み込み中…</div>
+<div class="market" id="market"></div>
+<div class="tabs">
+  <button data-f="zone" class="on">戻り売り</button>
+  <button data-f="all">全条件</button>
+  <button data-f="near">8条件以上</button>
+</div>
+<div id="list"></div>
+<p class="note">Stage 4（ワインスタイン）＋オニール流の空売り条件による機械的な抽出です。投資助言ではありません。
+制度信用で売れるのは貸借銘柄のみ（このリストでは未判定）。逆日歩と踏み上げに注意してください。</p>
+
+<script>
+let DATA = null, FILTER = "zone";
+const $ = (s) => document.querySelector(s);
+
+function card(s, conds) {
+  const tags = [];
+  if (s.all_pass) tags.push('<span class="tag t-red">全条件</span>');
+  if (s.rally_zone) tags.push('<span class="tag t-amb">戻り売りゾーン</span>');
+  const checks = Object.entries(conds).map(([k, label]) =>
+    `<li class="${s[k] ? "ok" : "ng"}">${s[k] ? "✓" : "–"} ${label}</li>`).join("");
+  return `<div class="card">
+    <div class="row1"><div><span class="name">${s.name}</span><span class="code">${s.code}</span></div>
+      <div class="price">${s.close.toLocaleString()}</div></div>
+    <div class="tags">${tags.join("")}<span class="tag" style="color:var(--sub)">${s.sector}</span></div>
+    <div class="nums">
+      <span>高値比 <b>${s.drawdown_pct}%</b></span>
+      <span>50日線 <b>${s.dist_50ma_pct > 0 ? "+" : ""}${s.dist_50ma_pct}%</b></span>
+      <span>RS <b>${s.rs}</b></span>
+      <span>損切目安 <b>${s.stop.toLocaleString()}</b></span>
+      <span>代金 <b>${s.turnover_oku}億</b></span>
+      <span>条件 <b>${s.score}/${Object.keys(conds).length}</b></span>
+    </div>
+    <details><summary>条件の内訳</summary><ul style="padding:0;margin:4px 0">${checks}</ul></details>
+  </div>`;
+}
+
+function render() {
+  if (!DATA) return;
+  let xs = DATA.stocks;
+  if (FILTER === "zone") xs = xs.filter((s) => s.rally_zone && s.score >= 9);
+  if (FILTER === "all") xs = xs.filter((s) => s.all_pass);
+  $("#list").innerHTML = xs.length
+    ? xs.map((s) => card(s, DATA.conditions)).join("")
+    : '<div class="empty">該当なし</div>';
+}
+
+document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach((x) => x.classList.remove("on"));
+  b.classList.add("on"); FILTER = b.dataset.f; render();
+});
+
+fetch("data/short.json?t=" + Date.now()).then((r) => r.json()).then((d) => {
+  DATA = d;
+  $("#meta").textContent = `更新 ${d.updated}　対象 ${d.universe_size} 銘柄`;
+  const m = d.market || {};
+  $("#market").innerHTML = `地合い（TOPIX 1306）：<b>${m.label || "-"}</b>`;
+  render();
+}).catch(() => {
+  $("#meta").textContent = "data/short.json がまだありません。Actions で short-screen を実行してください。";
+});
+</script>
+</body>
+</html>
