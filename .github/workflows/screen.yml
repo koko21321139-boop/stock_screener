@@ -26,6 +26,14 @@ jobs:
         env:
           UNIVERSE: ${{ vars.UNIVERSE }}
           MIN_TURNOVER: ${{ vars.MIN_TURNOVER }}
+      - name: moomoo のウォッチリストに同期（キーが無ければ何もしない）
+        continue-on-error: true     # 失敗してもスクリーニング結果の保存は続ける
+        run: python scripts/moomoo_sync.py
+        env:
+          MOOMOO_APP_KEY: ${{ secrets.MOOMOO_APP_KEY }}
+          MOOMOO_PRIVATE_KEY: ${{ secrets.MOOMOO_PRIVATE_KEY }}
+          MOOMOO_GROUP: ${{ vars.MOOMOO_GROUP }}
+          MOOMOO_MAX: ${{ vars.MOOMOO_MAX }}
       - name: 変更があればコミットする
         run: |
           git config user.name "github-actions[bot]"

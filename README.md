@@ -40,11 +40,23 @@
 - `UNIVERSE`：`prime`（既定）／`topix500`／`all`（プライム・スタンダード・グロース）
 - `MIN_TURNOVER`：20 日平均売買代金の下限（円。既定 100000000 = 1 億円）。少なすぎる銘柄を除く
 
+## moomoo のウォッチリストに同期（任意）
+
+毎日の通過銘柄（RS の高い順に最大 100 銘柄）を、moomoo アプリのウォッチリストの 1 グループに自動で入れます。通過しなくなった日本株はそのグループから外します。売買の権限は使いません。
+
+1. moomoo アプリで、ウォッチリストのグループ「スクリーナー」を作る（このグループは自動で入れ替わるので、手で入れた日本株も外れることがある）
+2. https://open.moomoo.com/dashboard → Console → AppKey Management で AppKey を作り、署名方式は Ed25519、公開鍵を登録。権限は相場（quote）のみにし、取引（trade）は付けない
+3. GitHub の Secrets に `MOOMOO_APP_KEY`（AppKey ID）と `MOOMOO_PRIVATE_KEY`（秘密鍵の PEM 全文）を登録
+4. 鍵は `python tools/make_moomoo_key.py` で作れる（秘密鍵は Secrets に入れたら手元から消す）
+
+グループ名を変えるときは Variables の `MOOMOO_GROUP`、上限数は `MOOMOO_MAX` で指定します。
+
 ## ファイル
 
 | パス | 役割 |
 |---|---|
 | `scripts/screen.py` | 判定プログラム |
+| `scripts/moomoo_sync.py` | moomoo のウォッチリストへの同期 |
 | `.github/workflows/screen.yml` | 自動実行の設定（`cron` は UTC。日本時間 − 9 時間） |
 | `data/screen.json` | 当日の判定結果 |
 | `data/history.json` | 日ごとの通過銘柄（直近 120 日。「◯日連続」「新規通過」に使用） |
