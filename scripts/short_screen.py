@@ -145,7 +145,9 @@ def evaluate(df: pd.DataFrame, p: ShortParams) -> dict | None:
     recent_break = bool((cross_down & heavy).iloc[-p.volume_break_window:].any())
 
     turnover20 = float((close * vol).iloc[-20:].mean())
-    dist50 = c / float(ma50.iloc[-1]) - 1
+    m50 = float(ma50.iloc[-1])
+    low20 = float(close.iloc[-20:].min())
+    dist50 = c / m50 - 1
 
     lb = p.slope_lookback
     return {
@@ -163,7 +165,17 @@ def evaluate(df: pd.DataFrame, p: ShortParams) -> dict | None:
         "dist_50ma_pct": round(dist50 * 100, 1),
         "turnover_oku": round(turnover20 / 1e8, 1),
         "rally_zone": bool(-p.rally_zone <= dist50 < 0),
-        "stop": round(float(max(ma50.iloc[-1], close.iloc[-20:].max())), 1),
+        # --- エントリー目安（オニール／モラレス流の戻り売り） ---
+        # 戻り売り：50日線の3%下〜50日線まで戻ったところで売る
+        "ma50": round(m50, 1),
+        "entry_lo": round(m50 * 0.97, 1),
+        "entry_hi": round(m50, 1),
+        # 下放れ売り：直近20日の安値を割ったら売る（戻りを待たない場合）
+        "breakdown": round(low20 * 0.995, 1),
+        # 損切り：50日線の4%上（50日線を明確に回復したら撤退）
+        "stop": round(m50 * 1.04, 1),
+        # 利確目安：売値から-20%
+        "target": round(m50 * 0.8, 1),
         "_wr": weighted_return(close),
     }
 
