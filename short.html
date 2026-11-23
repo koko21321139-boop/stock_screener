@@ -50,6 +50,16 @@
   .plan b { display:block; font-size:13px; color:var(--fg); font-variant-numeric:tabular-nums; }
   .plan .sell b { color:var(--red); } .plan .cut b { color:var(--green); }
   .plan .st { grid-column:1/-1; font-size:11.5px; text-align:left; }
+  .alert { background:var(--redbg); color:var(--red); border-radius:12px; padding:10px 12px; margin-bottom:10px; font-size:14px; }
+  .alert b { display:block; font-size:15px; }
+  .t-warn { background:var(--amberbg); color:var(--amber); font-weight:700; }
+  .t-sec { background:var(--redbg); color:var(--red); }
+  .srow { display:flex; align-items:center; gap:8px; font-size:13px; padding:3px 0; }
+  .srow .nm { width:9.5em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .srow .bar { flex:1; height:10px; border-radius:5px; background:var(--line); overflow:hidden; }
+  .srow .bar i { display:block; height:100%; background:var(--sub); }
+  .srow.weak .bar i { background:var(--red); }
+  .srow .v { width:3.5em; text-align:right; font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
@@ -58,15 +68,18 @@
   <a class="back" href="#" onclick="location.reload();return false;">更新</a>
 </header>
 <div class="meta" id="meta">読み込み中…</div>
+<div id="alert"></div>
 <div class="market" id="market"></div>
 <div class="tabs">
   <button data-f="zone" class="on">戻り売り</button>
   <button data-f="all">全条件</button>
-  <button data-f="near">8条件以上</button>
+  <button data-f="near">あと一歩</button>
+  <button data-f="sector">業種</button>
 </div>
 <div id="list"></div>
 <p class="note">Stage 4（ワインスタイン）＋オニール流の空売り条件による機械的な抽出です。投資助言ではありません。
-制度信用で売れるのは貸借銘柄のみ（このリストでは未判定）。逆日歩と踏み上げに注意してください。</p>
+制度信用で売れるのは貸借銘柄のみ（このリストでは未判定）。逆日歩と踏み上げに注意してください。
+「売り抜け」の数字は直近50日の上げ日÷下げ日の出来高比で、1未満は売りが優勢。決算日・権利落ち日は Yahoo Finance のデータで、欠けている銘柄もあります。</p>
 
 <script src="nav.js"></script>
 <script>
@@ -89,10 +102,26 @@ function plan(s) {
     <span class="st">${st}。戻りを待たない場合は ${yen(s.breakdown)} 割れで売り</span></div>`;
 }
 
+const md = (d) => d ? d.slice(5).replace("-", "/") : "";
+
+function sectorView() {
+  const th = (DATA.params?.sector_weak_ratio ?? 0.4) * 100;
+  const rows = (DATA.sectors || []).map((g) => `<div class="srow ${g.stage4_pct >= th ? "weak" : ""}">
+    <span class="nm">${g.sector}</span><span class="bar"><i style="width:${g.stage4_pct}%"></i></span>
+    <span class="v">${g.stage4_pct}%</span></div>`).join("");
+  return `<div class="card"><div style="font-weight:600;margin-bottom:4px">業種ごとのステージ4の割合</div>
+    ${rows || '<div class="empty">データなし</div>'}
+    <p class="note" style="margin-top:8px">業種内で、株価が下向きの150日線（30週線）の下にある銘柄の割合です。赤は${th}%以上の弱い業種。ワインスタインは「弱い業種の弱い銘柄を売る」ことを重視しました。</p></div>`;
+}
+
 function card(s, conds) {
   const tags = [];
   if (s.all_pass) tags.push('<span class="tag t-red">全条件</span>');
   if (s.rally_zone) tags.push('<span class="tag t-amb">戻り売りゾーン</span>');
+  if (s.c11) tags.push(`<span class="tag t-sec">弱い業種 ${s.sector_stage4_pct}%</span>`);
+  if (s.c12) tags.push(`<span class="tag t-sec">売り抜け ${s.ud_ratio}</span>`);
+  if (s.earnings_soon) tags.push(`<span class="tag t-warn">⚠ 決算 ${md(s.earnings_date)}</span>`);
+  if (s.exdiv_soon) tags.push(`<span class="tag t-warn">⚠ 権利落ち ${md(s.exdiv_date)}</span>`);
   const checks = Object.entries(conds).map(([k, label]) =>
     `<li class="${s[k] ? "ok" : "ng"}">${s[k] ? "✓" : "–"} ${label}</li>`).join("");
   return `<div class="card">
@@ -114,9 +143,12 @@ function card(s, conds) {
 
 function render() {
   if (!DATA) return;
+  if (FILTER === "sector") { $("#list").innerHTML = sectorView(); return; }
+  const total = Object.keys(DATA.conditions).length;
   let xs = DATA.stocks;
-  if (FILTER === "zone") xs = xs.filter((s) => s.rally_zone && s.score >= 9);
+  if (FILTER === "zone") xs = xs.filter((s) => s.rally_zone && s.score >= total - 2);
   if (FILTER === "all") xs = xs.filter((s) => s.all_pass);
+  if (FILTER === "near") xs = xs.filter((s) => !s.all_pass);
   $("#list").innerHTML = xs.length
     ? xs.map((s) => card(s, DATA.conditions)).join("")
     : '<div class="empty">該当なし</div>';
@@ -132,6 +164,8 @@ fetch("data/short.json?t=" + Date.now()).then((r) => r.json()).then((d) => {
   $("#meta").textContent = `更新 ${d.updated}　対象 ${d.universe_size} 銘柄`;
   const m = d.market || {};
   $("#market").innerHTML = `地合い（TOPIX 1306）：<b>${m.label || "-"}</b>`;
+  if (m.cover_alert) $("#alert").innerHTML = `<div class="alert"><b>⚠ 買い戻しを検討</b>${(m.cover_reasons || []).join("<br>")}<br>
+    地合いが反転し始めたサインです。ショート中なら利益確定・損切りの位置を引き上げ、新規のショートは控えめに。</div>`;
   render();
 }).catch(() => {
   $("#meta").textContent = "data/short.json がまだありません。Actions で short-screen を実行してください。";
