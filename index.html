@@ -37,7 +37,7 @@ button{background:none;border:0;cursor:pointer}
 .tab{padding:9px 12px;border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap}
 .tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
 .tab .n{font-size:11px;margin-left:3px}
-main{padding:10px 12px calc(env(safe-area-inset-bottom) + 40px);max-width:760px;margin:0 auto}
+main{padding:10px 12px calc(env(safe-area-inset-bottom) + 80px);max-width:760px;margin:0 auto}
 .chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:0 -12px 8px;padding:0 12px}
 .chip{padding:4px 11px;border:1px solid var(--line);border-radius:999px;font-size:13px;background:var(--card);white-space:nowrap}
 .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
@@ -75,6 +75,10 @@ td{padding:3px 2px;border-bottom:1px solid var(--line)} td:first-child{white-spa
 .sec{font-size:13px;font-weight:700;color:var(--muted);margin:14px 2px 8px}
 input[type=search]{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);margin-bottom:8px}
 .note{font-size:11.5px;color:var(--muted);margin-top:14px;line-height:1.6}
+.plan{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:8px;padding:7px 8px;border-radius:10px;background:var(--accent-soft);font-size:11px;color:var(--muted);text-align:center;line-height:1.3}
+.plan b{display:block;font-family:var(--num);font-size:13px;color:var(--ink)}
+.plan .buy b{color:var(--up)} .plan .cut b{color:var(--down)}
+.plan .st{grid-column:1/-1;font-size:11.5px;text-align:left}
 .more{display:block;width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);margin-top:4px}
 </style>
 </head>
@@ -154,6 +158,20 @@ function detail(i) {
     </table></details>`;
 }
 
+// エントリー目安（ミネルヴィニ／オニール）：ピボット超えで買い、ピボット+5%までが買ってよい範囲、
+// 損切りは買値の-7%、利確の目安は+20%
+const yen = v => Math.round(v).toLocaleString('ja-JP');
+function plan(i) {
+  if (!i.pivot || !i.close) return '';
+  const p = i.pivot, lim = p * 1.05, cut = p * 0.93, tp = p * 1.2;
+  const st = i.close < p ? `ピボットまで あと${((p / i.close - 1) * 100).toFixed(1)}%（超えたら買い）`
+    : i.close <= lim ? 'ピボット超え：買ってよい範囲内' : `ピボット+5%超え：追いかけ買いは避ける`;
+  return `<div class="plan">
+    <span class="buy">買い<b>${yen(p)}</b></span><span>上限<b>${yen(lim)}</b></span>
+    <span class="cut">損切り<b>${yen(cut)}</b></span><span>利確目安<b>${yen(tp)}</b></span>
+    <span class="st">${st}</span></div>`;
+}
+
 function card(i) {
   const st = stars.has(i.code), s = i.ttPass === 8 ? streak(i.code) : 0;
   const isNew = Object.keys(HIST).length > 1 ? s === 1 : i.new;
@@ -166,6 +184,7 @@ function card(i) {
     <div class="row2"><span class="px">${i.close?.toLocaleString('ja-JP')}円</span>${sgn(i.chg, 2)}
       <span class="meta">TT ${i.ttPass}/8</span><span class="rs">RS<b>${i.rs ?? '—'}</b></span></div>
     ${tags ? `<div class="tags">${tags}</div>` : ''}
+    ${i.ttPass >= 7 ? plan(i) : ''}
     ${i.cs ? letters(i) : ''}${chart(i.spark)}${detail(i)}</article>`;
 }
 
@@ -240,6 +259,6 @@ $('#reload').onclick = boot;
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 boot();
 </script>
-<script src="nav.js"></script>  
+<script src="nav.js"></script>
 </body>
 </html>
