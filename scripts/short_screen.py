@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -41,6 +42,12 @@ class ShortParams:
     rally_zone: float = 0.05      # 50日線の下何%以内なら「戻り売りゾーン」
     min_turnover_jpy: float = float(os.environ.get("MIN_TURNOVER_SHORT", 5e8))
     market_ticker: str = "1306.T"  # 地合い判定（TOPIX連動ETF）
+    sector_weak_ratio: float = 0.4  # 業種内でステージ4の銘柄がこの割合以上なら「弱い業種」
+    sector_min_count: int = 5       # 業種判定に必要な最低銘柄数
+    ud_window: int = 50             # 上げ日／下げ日の出来高を比べる日数
+    earnings_warn_days: int = 14    # 決算発表まで何日以内なら警告
+    exdiv_warn_days: int = 30       # 権利落ち日まで何日以内なら警告
+    ftd_min_gain: float = 0.012     # フォロースルーデーとみなす指数の上昇率（+1.2%以上）
 
 
 CONDITIONS = {
@@ -54,6 +61,8 @@ CONDITIONS = {
     "c8": "直近40日に大商いで50日線割れ",
     "c9": "売買代金が十分（踏み上げ回避）",
     "c10": "RSが30以下",
+    "c11": "業種の40%以上がステージ4（弱い業種）",
+    "c12": "下げ日の出来高が上げ日より多い（売り抜け）",
 }
 
 
@@ -121,8 +130,39 @@ def market_state(df: pd.DataFrame, p: ShortParams) -> dict:
         label = "調整中（ショートは選別して）"
     else:
         label = "上昇トレンド（ショートは控える）"
+    alerts = cover_alerts(df, ma50, p)
     return {"label": label, "below_50ma": below50, "below_200ma": below200,
-            "ma200_falling": falling200, "ok_for_short": below200 and falling200}
+            "ma200_falling": falling200, "ok_for_short": below200 and falling200,
+            "cover_alert": bool(alerts), "cover_reasons": alerts}
+
+
+def cover_alerts(df: pd.DataFrame, ma50: pd.Series, p: ShortParams) -> list[str]:
+    """ショートの買い戻しを検討すべき地合いの反転サイン。"""
+    close, vol = df["Close"], df["Volume"]
+    out = []
+
+    # ① TOPIXが直近5営業日以内に50日線を下から上に回復
+    above = close > ma50
+    recovered = above & ~above.shift(1, fill_value=True)
+    if recovered.iloc[-5:].any() and above.iloc[-1]:
+        d = recovered.iloc[-5:][recovered.iloc[-5:]].index[-1]
+        out.append(f"TOPIXが50日線を回復（{d:%m/%d}）")
+
+    # ② フォロースルーデー（オニール）：直近25日の安値から4日目以降に、
+    #    指数が+1.2%以上上昇し、出来高が前日を上回った日。安値を割り込んでいないこと。
+    win = close.iloc[-25:]
+    low_i = int(win.values.argmin())
+    low_pos = len(close) - 25 + low_i
+    low_v = float(close.iloc[low_pos])
+    was_correction = bool(close.iloc[low_pos] < ma50.iloc[low_pos])
+    if was_correction and float(close.iloc[low_pos:].min()) >= low_v:
+        chg = close.pct_change()
+        for k in range(low_pos + 4, len(close)):
+            if chg.iloc[k] >= p.ftd_min_gain and vol.iloc[k] > vol.iloc[k - 1]:
+                if len(close) - 1 - k <= 10:
+                    out.append(f"フォロースルーデー（{close.index[k]:%m/%d} +{chg.iloc[k] * 100:.1f}%）")
+                break
+    return out
 
 
 def evaluate(df: pd.DataFrame, p: ShortParams) -> dict | None:
@@ -149,6 +189,11 @@ def evaluate(df: pd.DataFrame, p: ShortParams) -> dict | None:
     low20 = float(close.iloc[-20:].min())
     dist50 = c / m50 - 1
 
+    chg = close.diff().iloc[-p.ud_window:]
+    v = vol.iloc[-p.ud_window:]
+    up_vol, down_vol = float(v[chg > 0].sum()), float(v[chg < 0].sum())
+    ud = up_vol / down_vol if down_vol > 0 else np.nan
+
     lb = p.slope_lookback
     return {
         "close": round(c, 1),
@@ -161,6 +206,9 @@ def evaluate(df: pd.DataFrame, p: ShortParams) -> dict | None:
         "c7": bool(high52 >= low_before_high * p.leader_runup),
         "c8": recent_break,
         "c9": bool(turnover20 >= p.min_turnover_jpy),
+        "c12": bool(ud < 1) if ud == ud else False,
+        "ud_ratio": round(ud, 2) if ud == ud else None,
+        "stage4": bool(c < ma150.iloc[-1] and ma150.iloc[-1] < ma150.iloc[-1 - lb]),
         "drawdown_pct": round((c / high52 - 1) * 100, 1),
         "dist_50ma_pct": round(dist50 * 100, 1),
         "turnover_oku": round(turnover20 / 1e8, 1),
@@ -178,6 +226,31 @@ def evaluate(df: pd.DataFrame, p: ShortParams) -> dict | None:
         "target": round(m50 * 0.8, 1),
         "_wr": weighted_return(close),
     }
+
+
+def fetch_events(code: str, p: ShortParams) -> dict:
+    """yfinance から次回の決算発表日と権利落ち日を取る（日本株は欠けることがある）。"""
+    today = datetime.now(JST).date()
+    out = {"earnings_date": None, "earnings_soon": False, "exdiv_date": None, "exdiv_soon": False}
+    try:
+        cal = yf.Ticker(f"{code}.T").calendar or {}
+    except Exception:
+        return out
+    ed = cal.get("Earnings Date")
+    ed = ed[0] if isinstance(ed, (list, tuple)) and ed else ed
+    if hasattr(ed, "year"):
+        ed = pd.Timestamp(ed).date()
+        if ed >= today:
+            out["earnings_date"] = ed.isoformat()
+            out["earnings_soon"] = (ed - today).days <= p.earnings_warn_days
+    xd = cal.get("Ex-Dividend Date")
+    if hasattr(xd, "year"):
+        xd = pd.Timestamp(xd).date()
+        if xd >= today:
+            out["exdiv_date"] = xd.isoformat()
+            out["exdiv_soon"] = (xd - today).days <= p.exdiv_warn_days
+    time.sleep(0.2)
+    return out
 
 
 def main():
@@ -203,12 +276,27 @@ def main():
     res = pd.DataFrame(rows)
     res["rs"] = (res["_wr"].rank(pct=True) * 98 + 1).round(0)
     res["c10"] = res["rs"] <= p.max_rs_rating
+
+    # --- ① 業種ごとの弱さ（全銘柄で集計） ---
+    g = res.groupby("sector")["stage4"].agg(["count", "mean"])
+    g = g[g["count"] >= p.sector_min_count]
+    res["sector_stage4_pct"] = res["sector"].map((g["mean"] * 100).round(0))
+    res["c11"] = res["sector_stage4_pct"].fillna(0) >= p.sector_weak_ratio * 100
+    sectors = [{"sector": k, "count": int(r["count"]), "stage4_pct": round(float(r["mean"]) * 100)}
+               for k, r in g.sort_values("mean", ascending=False).iterrows()]
+
     cond = list(CONDITIONS)
     res["score"] = res[cond].sum(axis=1).astype(int)
     res["all_pass"] = res["score"] == len(cond)
-    res = res.drop(columns="_wr")
-    res = res[res["score"] >= 8].sort_values(
-        ["all_pass", "rally_zone", "score", "rs"], ascending=[False, False, False, True])
+    res = res.drop(columns=["_wr", "stage4"])
+    res = res[res["score"] >= len(cond) - 3].sort_values(
+        ["all_pass", "c11", "rally_zone", "score", "rs"],
+        ascending=[False, False, False, False, True])
+
+    # --- ③ 決算・権利落ちの警告（候補銘柄だけ取得） ---
+    ev = res["code"].map(lambda c: fetch_events(c, p))
+    for k in ["earnings_date", "earnings_soon", "exdiv_date", "exdiv_soon"]:
+        res[k] = ev.map(lambda e: e.get(k))
 
     out = {
         "updated": datetime.now(JST).strftime("%Y-%m-%d %H:%M"),
@@ -216,10 +304,12 @@ def main():
         "conditions": CONDITIONS,
         "params": asdict(p),
         "universe_size": len(prices),
+        "sectors": sectors,
         "stocks": json.loads(res.to_json(orient="records", force_ascii=False)),
     }
     (DATA / "short.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-    print(f"全条件クリア {int(res['all_pass'].sum())} / 8条件以上 {len(res)}")
+    print(f"全条件クリア {int(res['all_pass'].sum())} / 候補 {len(res)}")
+    print("地合い:", market)
 
 
 if __name__ == "__main__":
