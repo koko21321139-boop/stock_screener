@@ -79,6 +79,10 @@ input[type=search]{width:100%;font:inherit;padding:9px 11px;border:1px solid var
 .plan b{display:block;font-family:var(--num);font-size:13px;color:var(--ink)}
 .plan .buy b{color:var(--up)} .plan .cut b{color:var(--down)}
 .plan .st{grid-column:1/-1;font-size:11.5px;text-align:left}
+.copybar{display:flex;gap:6px;margin:-2px 0 10px}
+.copybtn{flex:1;padding:7px 8px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:13px}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 96px);transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:8px 14px;border-radius:999px;font-size:13px;z-index:20;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
 .more{display:block;width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);margin-top:4px}
 </style>
 </head>
@@ -192,8 +196,10 @@ function list(items) {
   let arr = items.filter(i => [...state.filters].every(k => FILTERS.find(f => f[0] === k)[2](i)));
   arr = arr.sort(SORTS[state.sort][1]);
   const shown = arr.slice(0, state.limit);
+  state.current = arr;
   return `<div class="chips">${FILTERS.map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filters.has(k)}">${l}</button>`).join('')}</div>
     <div class="sortbar">${arr.length}銘柄 <span style="margin-left:auto">並び順</span><select id="sort">${Object.entries(SORTS).map(([k, [l]]) => `<option value="${k}" ${k === state.sort ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    ${arr.length ? `<div class="copybar"><button class="copybtn" data-copy="code">コードをコピー（${arr.length}）</button><button class="copybtn" data-copy="name">コード＋銘柄名をコピー</button></div>` : ''}
     ${shown.map(card).join('') || '<div class="empty">条件に合う銘柄はありません</div>'}
     ${arr.length > shown.length ? `<button class="more" id="more">さらに表示（残り${arr.length - shown.length}）</button>` : ''}`;
 }
@@ -238,7 +244,25 @@ function render() {
   const mo = $('#more'); if (mo) mo.onclick = () => { state.limit += 60; render(); };
 }
 
+function toast(msg) {
+  let t = document.querySelector('.toast');
+  if (!t) { t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); document.body.append(t); }
+  t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800);
+}
+async function copyList(kind) {
+  const arr = state.current || [];
+  const text = arr.map(i => kind === 'name' ? `${i.code}\t${i.name}` : i.code).join('\n');
+  try { await navigator.clipboard.writeText(text); }
+  catch {   // 古いブラウザ向けの予備
+    const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.append(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove();
+    if (!ok) { toast('コピーできませんでした'); return; }
+  }
+  toast(`${arr.length}銘柄をコピーしました`);
+}
 document.addEventListener('click', e => {
+  const c = e.target.closest('[data-copy]');
+  if (c) { copyList(c.dataset.copy); return; }
   const t = e.target.closest('[data-tab],[data-filter],[data-star]');
   if (!t) return;
   if (t.dataset.tab) { state.tab = t.dataset.tab; state.limit = 60; store.set('tab', state.tab); render(); scrollTo(0, 0); }
