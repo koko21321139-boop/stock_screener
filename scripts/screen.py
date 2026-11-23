@@ -211,6 +211,37 @@ def contractions(high, low, n=3, w=20):
     return out
 
 
+def period_returns(c):
+    """1日・1週・1か月・3か月・年初来の騰落率（%）。"""
+    out = {}
+    for k, n in (("d1", 1), ("w1", 5), ("m1", 21), ("m3", 63)):
+        out[k] = (c.iloc[-1] / c.iloc[-1 - n] - 1) * 100 if len(c) > n else None
+    prev = c[c.index < pd.Timestamp(c.index[-1].year, 1, 1)]
+    out["ytd"] = (c.iloc[-1] / prev.iloc[-1] - 1) * 100 if len(prev) else None
+    return out
+
+
+def sector_table(evals, stocks):
+    """東証33業種ごとに、構成銘柄の騰落率の中央値・通過数・50日線より上の割合・RS中央値を出す。
+    業種別の ETF が無い業種も多いので、銘柄の中央値で業種の強さを見る（売買代金の少ない銘柄は除外済み）。"""
+    groups = {}
+    for code, e in evals.items():
+        groups.setdefault(stocks[code]["sector"] or "不明", []).append(e)
+    med = lambda xs: (sorted(xs)[len(xs) // 2] if xs else None)
+    out = []
+    for name, es in groups.items():
+        row = {"name": name, "n": len(es), "pass": sum(sum(bool(x) for x in e["tt"]) == 8 for e in es),
+               "pct50": r(sum(bool(e["tt"][4]) for e in es) / len(es) * 100, 0),
+               "rsMed": med([e["rs"] for e in es if e.get("rs") is not None])}
+        for k in ("d1", "w1", "m1", "m3", "ytd"):
+            row[k] = r(med([e["rets"][k] for e in es if e["rets"].get(k) is not None]), 2)
+        out.append(row)
+    ranked = sorted([x for x in out if x.get("m3") is not None and x["n"] >= 3], key=lambda x: -x["m3"])
+    for k, x in enumerate(ranked, 1):
+        x["rank"] = k
+    return out
+
+
 def evaluate(df):
     """1 銘柄の指標。RS の順位づけ前の値を返す。"""
     c, h, l, v = df["Close"], df["High"], df["Low"], df["Volume"].fillna(0)
@@ -237,6 +268,7 @@ def evaluate(df):
     pivot = h.iloc[-21:-1].max()     # 直近 20 日（当日を除く）の高値
     return {
         "close": last, "chg": (last / c.iloc[-2] - 1) * 100 if len(c) > 1 else None,
+        "rets": period_returns(c),
         "tt": tt, "rsRaw": rs_raw(c),
         "fromHigh": (last / hi52 - 1) * 100, "fromLow": (last / lo52 - 1) * 100,
         "volRatio": v.iloc[-1] / vol50 if vol50 else None, "dryUp": vol10 / vol50 if vol50 else None,
@@ -381,7 +413,7 @@ def run(prices=None, fundamentals_fn=None):
 
     out = {"asof": asof, "updated": dt.datetime.now(JST).isoformat(timespec="minutes"), "universe": UNIVERSE,
            "count": len(items), "minTurnover": MIN_TURNOVER, "ttLabels": TT_LABELS,
-           "market": market_state(prices.get(MARKET_ETF)), "prevPass": sorted(prev_pass), "items": items}
+           "market": market_state(prices.get(MARKET_ETF)), "sectors": sector_table(evals, u["stocks"]), "prevPass": sorted(prev_pass), "items": items}
     save(DATA / "screen.json", out)
 
     # 通過銘柄の履歴（日付ごと。何日連続で通過しているかを見るため）
