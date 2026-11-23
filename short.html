@@ -16,7 +16,7 @@
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg);
          font:15px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
-         padding:env(safe-area-inset-top) 12px 40px; }
+         padding:env(safe-area-inset-top) 12px 90px; }
   header { display:flex; align-items:center; justify-content:space-between; padding:12px 2px 4px; }
   h1 { font-size:20px; margin:0; }
   a.back { color:var(--sub); text-decoration:none; font-size:14px; }
@@ -50,7 +50,7 @@
 <body>
 <header>
   <h1>ショート候補</h1>
-  <a class="back" href="./">← ロング</a>
+  <a class="back" href="#" onclick="location.reload();return false;">更新</a>
 </header>
 <div class="meta" id="meta">読み込み中…</div>
 <div class="market" id="market"></div>
@@ -63,6 +63,7 @@
 <p class="note">Stage 4（ワインスタイン）＋オニール流の空売り条件による機械的な抽出です。投資助言ではありません。
 制度信用で売れるのは貸借銘柄のみ（このリストでは未判定）。逆日歩と踏み上げに注意してください。</p>
 
+<script src="nav.js"></script>
 <script>
 let DATA = null, FILTER = "zone";
 const $ = (s) => document.querySelector(s);
