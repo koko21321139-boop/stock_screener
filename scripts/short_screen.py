@@ -48,6 +48,13 @@ class ShortParams:
     earnings_warn_days: int = 14    # 決算発表まで何日以内なら警告
     exdiv_warn_days: int = 30       # 権利落ち日まで何日以内なら警告
     ftd_min_gain: float = 0.012     # フォロースルーデーとみなす指数の上昇率（+1.2%以上）
+    # --- ステージ3→4移行（早めの売り場） ---
+    tr_dd_min: float = 0.10         # 高値からの下落がこの範囲（10〜25%）
+    tr_dd_max: float = 0.25
+    tr_high_within: int = 189       # 52週高値がこの営業日以内（約9か月）＝天井が最近
+    tr_cross_window: int = 15       # 150日線割れが直近何営業日以内か
+    tr_cross_vol: float = 1.4       # 150日線割れ前後の出来高が50日平均の何倍以上か
+    tr_rs_drop: float = 20          # RSが20営業日前から何ポイント以上低下したか
 
 
 CONDITIONS = {
@@ -63,6 +70,16 @@ CONDITIONS = {
     "c10": "RSが30以下",
     "c11": "業種の40%以上がステージ4（弱い業種）",
     "c12": "下げ日の出来高が上げ日より多い（売り抜け）",
+}
+
+TR_CONDITIONS = {
+    "t1": "天井前に1.5倍以上上昇（旧主導株）",
+    "t2": "高値から10〜25%下落、高値は9か月以内",
+    "t3": "上昇していた150日線が横ばい〜下向きに転換",
+    "t4": "直近15日以内に大商いで150日線割れ、今も下",
+    "t5": "50日線が下向きに転換",
+    "t6": "RSが20日前から20ポイント以上低下",
+    "t7": "売買代金が十分（踏み上げ回避）",
 }
 
 
@@ -195,6 +212,20 @@ def evaluate(df: pd.DataFrame, p: ShortParams) -> dict | None:
     ud = up_vol / down_vol if down_vol > 0 else np.nan
 
     lb = p.slope_lookback
+    # --- ステージ3→4移行の判定 ---
+    m150 = float(ma150.iloc[-1])
+    dd = 1 - c / high52
+    high_recent = (len(close) - 1 - high_pos) <= p.tr_high_within
+    ma150_flat_down = m150 <= float(ma150.iloc[-1 - lb]) * 1.005
+    ma150_was_rising = float(ma150.iloc[-60]) > float(ma150.iloc[-120])
+    below150 = close < ma150
+    cross150 = below150 & ~below150.shift(1, fill_value=True)
+    heavy150 = vol >= vol50 * p.tr_cross_vol
+    near_heavy = heavy150 | heavy150.shift(1, fill_value=False) | heavy150.shift(-1, fill_value=False)
+    tr_cross = bool((cross150 & near_heavy).iloc[-p.tr_cross_window:].any()) and bool(below150.iloc[-1])
+    ma50_down = m50 < float(ma50.iloc[-11])
+
+    lb = p.slope_lookback
     return {
         "close": round(c, 1),
         "c1": bool(c < ma150.iloc[-1]),
@@ -224,6 +255,21 @@ def evaluate(df: pd.DataFrame, p: ShortParams) -> dict | None:
         "stop": round(m50 * 1.04, 1),
         # 利確目安：売値から-20%
         "target": round(m50 * 0.8, 1),
+        # ステージ3→4移行
+        "t1": bool(high52 >= low_before_high * p.leader_runup),
+        "t2": bool(p.tr_dd_min <= dd <= p.tr_dd_max and high_recent),
+        "t3": bool(ma150_flat_down and ma150_was_rising),
+        "t4": tr_cross,
+        "t5": bool(ma50_down),
+        "t7": bool(turnover20 >= p.min_turnover_jpy),
+        "ma150": round(m150, 1),
+        "dist_150ma_pct": round((c / m150 - 1) * 100, 1),
+        # 移行時の売り場：150日線への戻り（割れた線が上値抵抗になる）
+        "tr_entry_lo": round(m150 * 0.97, 1),
+        "tr_entry_hi": round(m150, 1),
+        "tr_stop": round(max(m150 * 1.04, float(close.iloc[-20:].max()) * 1.01), 1),
+        "tr_target": round(m150 * 0.8, 1),
+        "_wr_prev": weighted_return(close.iloc[:-20]),
         "_wr": weighted_return(close),
     }
 
@@ -276,6 +322,8 @@ def main():
     res = pd.DataFrame(rows)
     res["rs"] = (res["_wr"].rank(pct=True) * 98 + 1).round(0)
     res["c10"] = res["rs"] <= p.max_rs_rating
+    res["rs_prev"] = (res["_wr_prev"].rank(pct=True) * 98 + 1).round(0)
+    res["t6"] = (res["rs_prev"] - res["rs"]) >= p.tr_rs_drop
 
     # --- ① 業種ごとの弱さ（全銘柄で集計） ---
     g = res.groupby("sector")["stage4"].agg(["count", "mean"])
@@ -288,7 +336,22 @@ def main():
     cond = list(CONDITIONS)
     res["score"] = res[cond].sum(axis=1).astype(int)
     res["all_pass"] = res["score"] == len(cond)
-    res = res.drop(columns=["_wr", "stage4"])
+    res = res.drop(columns=["_wr", "_wr_prev", "stage4"])
+
+    # --- ステージ3→4移行の候補（ステージ4とは別リスト） ---
+    tcond = list(TR_CONDITIONS)
+    res["tr_score"] = res[tcond].sum(axis=1).astype(int)
+    tr = res[res["tr_score"] >= len(tcond) - 1].copy()
+    tr["tr_pass"] = tr["tr_score"] == len(tcond)
+    tr = tr.sort_values(["tr_pass", "tr_score", "rs"], ascending=[False, False, True])
+    tr_cols = ["code", "name", "sector", "close", "rs", "rs_prev", "drawdown_pct", "dist_150ma_pct",
+               "ma150", "tr_entry_lo", "tr_entry_hi", "tr_stop", "tr_target", "breakdown",
+               "turnover_oku", "sector_stage4_pct", "c11", "c12", "ud_ratio", "tr_score", "tr_pass"] + tcond
+    tr = tr[tr_cols]
+    tev = tr["code"].map(lambda c: fetch_events(c, p))
+    for k in ["earnings_date", "earnings_soon", "exdiv_date", "exdiv_soon"]:
+        tr[k] = tev.map(lambda e: e.get(k))
+
     res = res[res["score"] >= len(cond) - 3].sort_values(
         ["all_pass", "c11", "rally_zone", "score", "rs"],
         ascending=[False, False, False, False, True])
@@ -305,10 +368,12 @@ def main():
         "params": asdict(p),
         "universe_size": len(prices),
         "sectors": sectors,
+        "tr_conditions": TR_CONDITIONS,
+        "transition": json.loads(tr.to_json(orient="records", force_ascii=False)),
         "stocks": json.loads(res.to_json(orient="records", force_ascii=False)),
     }
     (DATA / "short.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-    print(f"全条件クリア {int(res['all_pass'].sum())} / 候補 {len(res)}")
+    print(f"全条件クリア {int(res['all_pass'].sum())} / 候補 {len(res)} / 3→4移行 {len(tr)}")
     print("地合い:", market)
 
 
