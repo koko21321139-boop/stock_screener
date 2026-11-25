@@ -183,24 +183,74 @@ function plan(i) {
     <span class="st">${st}</span></div>`;
 }
 
-// 総合スコア（100点満点）：値動きだけで評価する。CAN-SLIM（ファンダ）は点数に入れず「握力」として表示
+// 総合スコア（100点満点）：ミネルヴィニ（SEPA）の重要度に沿った配点
+//   足切り：トレンドテンプレート8/8 かつ ピボットの-3%〜+5%
+//   VCP・ベースの質30 / リーダー性25 / ブレイクの出来高15 / リスクの小ささ15 / 業績10 / ステージの若さ5
+//   足切りのRSは80以上（トレンドテンプレートの70より厳しく）
+const RS_MIN = 80;
 const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+
+// RSライン（個別株 ÷ TOPIX）：データに rsLineHigh / rsLead があればそれを使い、
+// なければ直近6か月の株価とTOPIX（期初比%）から計算する
+function rsLine(i) {
+  if (i.rsLineHigh != null) return { high: !!i.rsLineHigh, lead: !!i.rsLead };
+  const c = i.spark?.c, m = D.market?.spark;
+  if (!c?.length || !m?.length || c.length !== m.length) return { high: false, lead: false };
+  const line = c.map((v, k) => v == null || m[k] == null ? null : v / (100 + m[k]));
+  const vals = line.filter(v => v != null);
+  if (vals.length < 20) return { high: false, lead: false };
+  const high = line[line.length - 1] >= Math.max(...vals) * 0.995;
+  const priceMax = Math.max(...c.filter(v => v != null));
+  const lead = high && c[c.length - 1] < priceMax * 0.99;   // RSラインが株価より先に高値更新
+  return { high, lead };
+}
 function longScore(i) {
   if (!i.pivot || !i.close) return null;
   const r = i.close / i.pivot - 1;
-  if (r < -0.03 || r > 0.05) return null;            // 入口の条件：ピボットの-3%〜+5%だけ
+  if (r < -0.03 || r > 0.05) return null;
+  if ((i.rs ?? 0) < RS_MIN) return null;              // 足切り：RS 80以上
   const why = [];
-  let sc = clamp(((i.rs ?? 70) - 70) / 29) * 35;     // RSの強さ（最大35）
+  let sc = 0;
+
+  // ① VCP・ベースの質（30）：収縮が段階的に小さくなる／最後の収縮が締まる／出来高の細り
+  const con = (i.con || []).filter(v => v != null);
+  let base = 0;
+  if (con.length >= 2) {
+    let steps = 0; for (let k = 1; k < con.length; k++) if (con[k] < con[k - 1]) steps++;
+    base += steps / (con.length - 1) * 10;
+  }
+  const last = con.slice(-1)[0];
+  if (last != null) base += clamp((15 - last) / 10) * 10;     // 15%以上0点 → 5%以下10点
+  if (i.dryUp != null) base += clamp((1 - i.dryUp) / 0.5) * 10; // 出来高が平均の半分まで細れば満点
+  if (i.vcp) base = Math.max(base, 20);
+  sc += clamp(base, 0, 30);
+  if (i.vcp) why.push('VCP');
+  if (last != null && last <= 10) why.push(`値幅${last.toFixed(0)}%に収縮`);
+
+  // ② リーダー性（25）：RSの高さ（最大10）＋RSラインの高値更新（最大10）＋52週高値への近さ（最大5）
+  sc += clamp(((i.rs ?? RS_MIN) - RS_MIN) / (99 - RS_MIN)) * 10;
+  const rl = rsLine(i);
+  if (rl.lead) { sc += 10; why.push('RSラインが先行して高値更新'); }
+  else if (rl.high) { sc += 7; why.push('RSライン高値更新'); }
+  sc += clamp((15 + (i.fromHigh ?? -15)) / 15) * 5;
   if ((i.rs ?? 0) >= 90) why.push(`RS ${i.rs}`);
-  if (i.breakout && (i.volRatio ?? 0) >= 1.4) { sc += 20; why.push(`出来高ブレイク ${i.volRatio}倍`); }
-  else if (i.breakout) { sc += 5; why.push('ブレイク（出来高不足）'); }
-  else if (i.dryUp != null && i.dryUp <= 0.7) { sc += 10; why.push('出来高の細り'); }
-  if (i.vcp) { sc += 12; why.push('VCP'); }          // ベースの質（最大20）
-  const lastCon = (i.con || []).filter(v => v != null).slice(-1)[0];
-  if (lastCon != null && lastCon <= 10) { sc += 8; why.push(`値幅${lastCon.toFixed(0)}%に収縮`); }
-  sc += (1 - Math.abs(r) / 0.05) * 15;                // ピボットへの近さ（最大15）
+
+  // ③ ブレイクの出来高（15）
+  if (i.breakout && (i.volRatio ?? 0) >= 1.4) { sc += 15; why.push(`出来高ブレイク ${i.volRatio}倍`); }
+  else if (i.breakout) { sc += 4; why.push('ブレイク（出来高不足）'); }
+
+  // ④ リスクの小ささ（15）：ピボットに近いほど損切り幅が小さく、追いかけにならない
+  sc += (1 - Math.abs(r) / 0.05) * 15;
   why.push(r >= 0 ? '買い場（ピボット超え）' : `ピボットまで${(-r * 100).toFixed(1)}%`);
-  if (i.fromHigh >= -5) sc += 10;                     // 高値圏（最大10）
+
+  // ⑤ 業績（10）：C（四半期EPS）とA（年間EPS）。データがなければ中間の5点
+  const c = i.cs?.C, a = i.cs?.A;
+  if (c == null && a == null) sc += 5;
+  else sc += (c ? 6 : 0) + (a ? 4 : 0);
+
+  // ⑥ ステージの若さ（5）：52週安値からの上昇率が小さいほど初期のベース（100%以下で満点、300%で0点）
+  if (i.fromLow != null) sc += clamp((300 - i.fromLow) / 200) * 5;
+
   return { sc: Math.round(clamp(sc, 0, 100)), why };
 }
 
@@ -216,7 +266,7 @@ function top3(items) {
       ${i.cs ? `<div class="why">握力（CAN-SLIM）：${csCount(i)}/7文字</div>` : ''}</div>
       <span class="sc">点<b>${sc}</b></span></div>`).join('')}
     ${ms !== '上昇トレンド' ? `<div class="warn">⚠ 地合いが「${esc(ms)}」です。オニールは上昇トレンド以外での新規買いを勧めていません。</div>` : ''}
-    <div class="why" style="margin-top:4px">値動き（RS・出来高・ベースの質・ピボットへの近さ・高値圏）だけを点数化した機械的な順位です。ピボットの-3%〜+5%にいる銘柄だけが対象で、CAN-SLIMは保有を続ける根拠（握力）として表示しています。</div></section>`;
+    <div class="why" style="margin-top:4px">ミネルヴィニの重視点に沿った配点（VCP・ベースの質30／リーダー性25〈RS・RSライン〉／ブレイクの出来高15／リスクの小ささ15／業績10／ステージの若さ5）による機械的な順位です。RS 80以上で、ピボットの-3%〜+5%にいる銘柄だけが対象です。</div></section>`;
 }
 
 function card(i) {
@@ -225,6 +275,7 @@ function card(i) {
   const tags = [isNew && '<span class="pill hot">新規通過</span>', i.breakout && '<span class="pill hot">ブレイク</span>',
     i.vcp && '<span class="pill ok">VCP候補</span>', i.newHigh && '<span class="pill">52週高値</span>',
     i.pivot && i.close > i.pivot * 1.05 && '<span class="pill gray">伸びすぎ（押し目待ち）</span>',
+    (() => { const rl = rsLine(i); return rl.lead ? '<span class="pill ok">RSライン先行高値</span>' : rl.high ? '<span class="pill ok">RSライン高値</span>' : ''; })(),
     s > 1 && `<span class="pill gray">${s}日連続</span>`, i.scale && `<span class="pill gray">${esc(i.scale)}</span>`].filter(Boolean).join('');
   return `<article class="card">
     <div class="row1"><span class="name">${esc(i.name)}</span><span class="code">${esc(i.code)}</span><span class="meta">${esc(i.sector)}</span>
