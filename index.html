@@ -34,7 +34,7 @@ button{background:none;border:0;cursor:pointer}
 .mkt{display:inline-block;font-weight:700;border-radius:999px;padding:1px 9px;font-size:12px}
 .mkt.good{background:var(--ok-soft);color:var(--ok)} .mkt.warn{background:#fdf1d8;color:#9a6700} .mkt.bad{background:var(--down-soft);color:var(--down)}
 .tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
-.tab{padding:9px 12px;border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap}
+.tab{padding:9px 9px;border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap}
 .tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
 .tab .n{font-size:11px;margin-left:3px}
 main{padding:10px 12px calc(env(safe-area-inset-bottom) + 80px);max-width:760px;margin:0 auto}
@@ -79,6 +79,26 @@ input[type=search]{width:100%;font:inherit;padding:9px 11px;border:1px solid var
 .plan b{display:block;font-family:var(--num);font-size:13px;color:var(--ink)}
 .plan .buy b{color:var(--up)} .plan .cut b{color:var(--down)}
 .plan .st{grid-column:1/-1;font-size:11.5px;text-align:left}
+.copybar{display:flex;gap:6px;margin:-2px 0 10px}
+.copybtn{flex:1;padding:7px 8px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:13px}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 96px);transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:8px 14px;border-radius:999px;font-size:13px;z-index:20;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
+.sec-row{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 11px;margin-bottom:7px}
+.sec-top{display:flex;align-items:center;gap:8px}
+.sec-name{font-weight:700;width:96px;flex:none;font-size:14px;line-height:1.3}
+.sec-name small{display:block;font-weight:400;font-size:11px;color:var(--muted)}
+.bar{flex:1;height:14px;position:relative;background:var(--accent-soft);border-radius:4px}
+.bar i{position:absolute;top:0;bottom:0;border-radius:4px}
+.bar .mid{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--muted)}
+.sec-val{width:58px;text-align:right;font-family:var(--num);font-size:13px}
+.sec-sub{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:4px;padding-left:104px}
+.sec-sub b{color:var(--ink);font-weight:600}
+.secchip{display:inline-flex;align-items:center;gap:6px;margin:0 0 8px;padding:4px 10px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:13px}
+.pill.warn{background:#fdf1d8;color:#8a5a00}
+@media (prefers-color-scheme:dark){.pill.warn{background:#3a2e14;color:#f2c14e}}
+.perf{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+.perf div{background:var(--accent-soft);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--muted)}
+.perf b{display:block;font-size:18px;font-family:var(--num);color:var(--ink)}
 .top3{background:var(--card);border:2px solid var(--accent);border-radius:14px;padding:10px 12px;margin-bottom:12px}
 .top3 h2{font-size:14px;margin:0 0 6px}
 .top3 .r{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--line)}
@@ -103,6 +123,7 @@ input[type=search]{width:100%;font:inherit;padding:9px 11px;border:1px solid var
   <nav class="tabs" role="tablist">
     <button class="tab" role="tab" data-tab="pass">通過<span class="n" id="n-pass"></span></button>
     <button class="tab" role="tab" data-tab="near">あと一歩<span class="n" id="n-near"></span></button>
+    <button class="tab" role="tab" data-tab="sector">業種</button>
     <button class="tab" role="tab" data-tab="market">地合い</button>
     <button class="tab" role="tab" data-tab="search">検索</button>
   </nav>
@@ -115,14 +136,17 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('scr-' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('scr-' + k, JSON.stringify(v)); } catch {} }
 };
-const state = { tab: store.get('tab', 'pass'), filters: new Set(), sort: store.get('sort', 'rs'), q: '', limit: 60 };
+const state = { secPeriod: store.get('secPeriod', 'm1'), sector: null, tab: store.get('tab', 'pass'), filters: new Set(), sort: store.get('sort', 'rs'), q: '', limit: 60 };
 let stars = new Set(store.get('stars', []));
 let D = null, HIST = {}, EXCL = {};
+const norm = s => String(s ?? '').normalize('NFKC').toLowerCase();
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sgn = (v, d = 1, unit = '%') => v == null ? '—' : `<span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${v > 0 ? '+' : ''}${v.toFixed(d)}${unit}</span>`;
 
 const FILTERS = [
-  ['vcp', 'VCP候補', i => i.vcp], ['bo', 'ブレイク', i => i.breakout], ['new', '新規通過', i => i.ttPass === 8 && (Object.keys(HIST).length > 1 ? streak(i.code) === 1 : i.new)],
+  ['vcp', 'VCP候補', i => i.vcp], ['bo', 'ブレイク', i => i.breakout],
+  ['form', '買いの形', i => i.vcp || i.tight || i.pocket || i.breakout], ['rsl', 'RSライン高値', i => i.rsLineHigh],
+  ['safe', '伸びすぎ・決算前を除く', i => !i.extended && !((d => d != null && d <= 14)(daysTo(i)))], ['new', '新規通過', i => i.ttPass === 8 && (Object.keys(HIST).length > 1 ? streak(i.code) === 1 : i.new)],
   ['hi', '高値圏 5%以内', i => i.fromHigh >= -5], ['cs', 'CAN-SLIM 5文字以上', i => csCount(i) >= 5],
   ['t500', 'TOPIX500', i => ['Core30', 'Large70', 'Mid400'].includes(i.scale)], ['star', '★', i => stars.has(i.code)],
 ];
@@ -151,6 +175,14 @@ function letters(i) {
   return `<div class="letters">${'CANSLIM'.split('').map(k => `<span class="letter ${L[k] ? 'on' : L[k] == null ? 'na' : ''}" title="${tip[k]}">${k}</span>`).join('')}</div>`;
 }
 
+function daysTo(i) {
+  const d = i.fund?.nextEarnings;
+  if (!d) return null;
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  return Math.round((new Date(d + 'T00:00:00') - t) / 864e5);
+}
+const trend = arr => (arr || []).length ? arr.map(v => (v > 0 ? '+' : '') + v.toFixed(0) + '%').join(' → ') : '—';
+
 function detail(i) {
   const f = i.fund || {}, labels = D.ttLabels;
   const csRows = [['直近四半期EPS（前年比）', sgn(f.qEpsYoY)], ['売上高（前年比）', sgn(f.qRevYoY)],
@@ -159,27 +191,34 @@ function detail(i) {
   return `<details><summary>条件の詳細 ›</summary>
     <ul class="check">${i.tt.map((ok, k) => `<li><span class="${ok ? 'yes' : 'no'}">${ok ? '✓' : '×'}</span>${esc(labels[k])}</li>`).join('')}</ul>
     <table>
+      <tr><td>50日線からの乖離</td><td>${sgn(i.ext50)}${i.extended ? '（伸びすぎ）' : ''}</td></tr>
+      <tr><td>RSライン（指数との相対）</td><td>${i.rsLead ? '株価より先に高値' : i.rsLineHigh ? '52週高値圏' : i.rsLineHigh === false ? '高値圏ではない' : '—'}</td></tr>
+      <tr><td>出来高の質（上昇日÷下落日）</td><td>${i.ud ?? '—'}${i.ud >= 1.2 ? '（買い集め）' : i.ud <= 0.8 ? '（売り抜け）' : ''}</td></tr>
+      <tr><td>1日の平均値幅（ATR）</td><td>${i.atrPct ?? '—'}%</td></tr>
       <tr><td>52週高値から / 安値から</td><td>${sgn(i.fromHigh)} / ${sgn(i.fromLow, 0)}</td></tr>
       <tr><td>出来高（当日 ÷ 50日平均）</td><td>${i.volRatio ?? '—'}倍</td></tr>
       <tr><td>出来高の細り（10日 ÷ 50日）</td><td>${i.dryUp ?? '—'}</td></tr>
       <tr><td>値幅の収縮（20日ごと）</td><td>${(i.con || []).map(v => v?.toFixed(0) + '%').join(' → ')}</td></tr>
       <tr><td>ピボット（20日高値）</td><td>${i.pivot?.toLocaleString('ja-JP') ?? '—'}（${sgn(i.toPivot)}）</td></tr>
       <tr><td>20日平均売買代金</td><td>${i.turnover}億円</td></tr>
+      ${i.fund ? `<tr><td>次の決算予定</td><td>${i.fund.nextEarnings ? `${i.fund.nextEarnings.slice(5).replace('-', '/')}（あと${daysTo(i)}日）` : '—'}</td></tr>
+        <tr><td>EPS伸び率の推移（前年比）</td><td>${trend(i.fund.epsYoYs)}${i.fund.accelEps ? '（加速）' : ''}</td></tr>
+        <tr><td>売上伸び率の推移（前年比）</td><td>${trend(i.fund.revYoYs)}${i.fund.accelRev ? '（加速）' : ''}</td></tr>` : ''}
       ${i.fund ? csRows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') : ''}
     </table></details>`;
 }
 
 // エントリー目安（ミネルヴィニ／オニール）：ピボット超えで買い、ピボット+5%までが買ってよい範囲、
-// 損切りは買値の-7%、利確の目安は+20%
+// 損切りは値動きの大きさ（ATR の 2 倍）に合わせて買値の -3〜-8%、利確の目安は +20%
 const yen = v => Math.round(v).toLocaleString('ja-JP');
 function plan(i) {
   if (!i.pivot || !i.close) return '';
-  const p = i.pivot, lim = p * 1.05, cut = p * 0.93, tp = p * 1.2;
+  const p = i.pivot, stop = i.stopPct ?? 7, lim = p * 1.05, cut = p * (1 - stop / 100), tp = p * 1.2;
   const st = i.close < p ? `ピボットまで あと${((p / i.close - 1) * 100).toFixed(1)}%（超えたら買い）`
     : i.close <= lim ? 'ピボット超え：買ってよい範囲内' : `ピボット+5%超え：追いかけ買いは避ける`;
   return `<div class="plan">
     <span class="buy">買い<b>${yen(p)}</b></span><span>上限<b>${yen(lim)}</b></span>
-    <span class="cut">損切り<b>${yen(cut)}</b></span><span>利確目安<b>${yen(tp)}</b></span>
+    <span class="cut">損切り -${stop.toFixed(1)}%<b>${yen(cut)}</b></span><span>利確目安<b>${yen(tp)}</b></span>
     <span class="st">${st}</span></div>`;
 }
 
@@ -211,6 +250,7 @@ const frozen = i => { const last = (i.con || []).filter(v => v != null).slice(-1
 function longScore(i) {
   if (!i.pivot || !i.close) return null;
   if (frozen(i)) return null;                         // 値動き停止はトップ3から除外
+  const dte = daysTo(i); if (dte != null && dte >= 0 && dte <= 14) return null;  // 決算前14日以内は除外
   const r = i.close / i.pivot - 1;
   if (r < -0.03 || r > 0.05) return null;
   if ((i.rs ?? 0) < RS_MIN) return null;              // 足切り：RS 80以上
@@ -267,24 +307,33 @@ function top3(items) {
   return `<section class="top3"><h2>総合スコア トップ3</h2>
     ${ranked.map(({ i, sc, why }, k) => `<div class="r"><span class="rk">${k + 1}</span>
       <div class="bd"><div class="nm">${esc(i.name)} <span class="code">${esc(i.code)}</span></div>
-      <div class="why">${why.join('・') || '—'}　買い ${yen(i.pivot)} / 損切り ${yen(i.pivot * 0.93)}</div>
+      <div class="why">${why.join('・') || '—'}　買い ${yen(i.pivot)} / 損切り ${yen(i.pivot * (1 - (i.stopPct ?? 7) / 100))}</div>
       ${i.cs ? `<div class="why">握力（CAN-SLIM）：${csCount(i)}/7文字</div>` : ''}</div>
       <span class="sc">点<b>${sc}</b></span></div>`).join('')}
     ${ms !== '上昇トレンド' ? `<div class="warn">⚠ 地合いが「${esc(ms)}」です。オニールは上昇トレンド以外での新規買いを勧めていません。</div>` : ''}
-    <div class="why" style="margin-top:4px">ミネルヴィニの重視点に沿った配点（VCP・ベースの質30／リーダー性25〈RS・RSライン〉／ブレイクの出来高15／リスクの小ささ15／業績10／ステージの若さ5）による機械的な順位です。RS 80以上で、ピボットの-3%〜+5%にいる銘柄だけが対象です。</div></section>`;
+    <div class="why" style="margin-top:4px">ミネルヴィニの重視点に沿った配点（VCP・ベースの質30／リーダー性25〈RS・RSライン〉／ブレイクの出来高15／リスクの小ささ15／業績10／ステージの若さ5）による機械的な順位です。RS 80以上で、ピボットの-3%〜+5%にいる銘柄だけが対象で、決算前14日以内と値動きが止まった銘柄（TOB等）は除外しています。</div></section>`;
+}
+
+function secRank(name) {
+  const x = (D.sectors || []).find(s => s.name === name);
+  return x?.rank ? `（${x.rank}位）` : '';
 }
 
 function card(i) {
   const st = stars.has(i.code), s = i.ttPass === 8 ? streak(i.code) : 0;
   const isNew = Object.keys(HIST).length > 1 ? s === 1 : i.new;
   const tags = [isNew && '<span class="pill hot">新規通過</span>', i.breakout && '<span class="pill hot">ブレイク</span>',
-    i.vcp && '<span class="pill ok">VCP候補</span>', i.newHigh && '<span class="pill">52週高値</span>',
+    i.vcp && '<span class="pill ok">VCP候補</span>', i.tight && '<span class="pill ok">3週タイト</span>',
+    i.pocket && '<span class="pill ok">ポケットピボット</span>',
+    i.rsLead ? '<span class="pill ok">RSライン先行</span>' : i.rsLineHigh && '<span class="pill">RSライン高値</span>',
+    i.newHigh && '<span class="pill">52週高値</span>', i.fund?.accelEps && '<span class="pill ok">EPS加速</span>',
+    i.ud >= 1.2 && '<span class="pill">買い集め</span>', i.ud != null && i.ud <= 0.8 && '<span class="pill warn">売り抜け</span>',
+    i.extended && `<span class="pill warn">伸びすぎ +${i.ext50.toFixed(0)}%</span>`,
     frozen(i) && '<span class="pill hot">⚠ 値動き停止（TOB等？）</span>',
-    i.pivot && i.close > i.pivot * 1.05 && '<span class="pill gray">伸びすぎ（押し目待ち）</span>',
-    (() => { const rl = rsLine(i); return rl.lead ? '<span class="pill ok">RSライン先行高値</span>' : rl.high ? '<span class="pill ok">RSライン高値</span>' : ''; })(),
+    (d => d != null && d >= 0 && d <= 14 && `<span class="pill warn">決算まで${d}日</span>`)(daysTo(i)),
     s > 1 && `<span class="pill gray">${s}日連続</span>`, i.scale && `<span class="pill gray">${esc(i.scale)}</span>`].filter(Boolean).join('');
   return `<article class="card">
-    <div class="row1"><span class="name">${esc(i.name)}</span><span class="code">${esc(i.code)}</span><span class="meta">${esc(i.sector)}</span>
+    <div class="row1"><span class="name">${esc(i.name)}</span><span class="code">${esc(i.code)}</span><span class="meta">${esc(i.sector)}${secRank(i.sector)}</span>
       <button class="star" data-star="${esc(i.code)}" aria-pressed="${st}" aria-label="ウォッチ">${st ? '★' : '☆'}</button></div>
     <div class="row2"><span class="px">${i.close?.toLocaleString('ja-JP')}円</span>${sgn(i.chg, 2)}
       <span class="meta">TT ${i.ttPass}/8</span><span class="rs">RS<b>${i.rs ?? '—'}</b></span></div>
@@ -295,12 +344,52 @@ function card(i) {
 
 function list(items) {
   let arr = items.filter(i => [...state.filters].every(k => FILTERS.find(f => f[0] === k)[2](i)));
+  if (state.sector) arr = arr.filter(i => i.sector === state.sector);
   arr = arr.sort(SORTS[state.sort][1]);
   const shown = arr.slice(0, state.limit);
-  return `<div class="chips">${FILTERS.map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filters.has(k)}">${l}</button>`).join('')}</div>
+  state.current = arr;
+  return `${state.sector ? `<button class="secchip" data-clearsector="1">${esc(state.sector)}のみ ✕</button>` : ''}<div class="chips">${FILTERS.map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${state.filters.has(k)}">${l}</button>`).join('')}</div>
     <div class="sortbar">${arr.length}銘柄 <span style="margin-left:auto">並び順</span><select id="sort">${Object.entries(SORTS).map(([k, [l]]) => `<option value="${k}" ${k === state.sort ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    ${arr.length ? `<div class="copybar"><button class="copybtn" data-copy="code">コードをコピー（${arr.length}）</button><button class="copybtn" data-copy="name">コード＋銘柄名をコピー</button></div>` : ''}
     ${shown.map(card).join('') || '<div class="empty">条件に合う銘柄はありません</div>'}
     ${arr.length > shown.length ? `<button class="more" id="more">さらに表示（残り${arr.length - shown.length}）</button>` : ''}`;
+}
+
+const PERIODS = [['d1', '1日'], ['w1', '1週'], ['m1', '1か月'], ['m3', '3か月'], ['ytd', '年初来']];
+function sectorView() {
+  const per = state.secPeriod || 'm1';
+  // 3銘柄未満の業種は中央値がぶれやすいので下にまとめ、棒の長さの基準にも使わない
+  const rows = (D.sectors || []).filter(x => x[per] != null).sort((a, b) => (b.n >= 3) - (a.n >= 3) || b[per] - a[per]);
+  if (!rows.length) return '<div class="empty">業種のデータは次回の更新から表示されます</div>';
+  const maxAbs = Math.max(...rows.filter(x => x.n >= 3).map(x => Math.abs(x[per])), 0.1);
+  return `<div class="chips">${PERIODS.map(([k, l]) => `<button class="chip" data-period="${k}" aria-pressed="${k === per}">${l}</button>`).join('')}</div>
+    ${rows.map(x => {
+      const v = x[per], w = Math.min(50, Math.abs(v) / maxAbs * 50);
+      const bar = `<i style="${v >= 0 ? `left:50%;width:${w}%;background:var(--up)` : `right:50%;width:${w}%;background:var(--down)`}"></i>`;
+      return `<button class="sec-row" data-sector="${esc(x.name)}"${x.n < 3 ? ' style="opacity:.6"' : ''}>
+        <div class="sec-top"><span class="sec-name">${esc(x.name)}<small>${x.n}銘柄${x.rank ? `・${x.rank}位` : x.n < 3 ? '・参考' : ''}</small></span>
+          <span class="bar">${bar}<span class="mid"></span></span><span class="sec-val">${sgn(v)}</span></div>
+        <div class="sec-sub"><span>通過 <b>${x.pass ?? 0}</b>/${x.n ?? 0}</span><span>50日線より上 <b>${x.pct50 ?? '—'}%</b></span>
+          <span>RS中央値 <b>${x.rsMed ?? '—'}</b></span></div></button>`;
+    }).join('')}
+    <p class="note">東証33業種ごとに、業種内の銘柄の騰落率の中央値を出しています（売買代金が少ない銘柄は除外）。順位は3か月騰落率の順で、3銘柄未満の業種は順位なしです。「通過」は業種内でトレンドテンプレート全8条件を満たした銘柄数、「50日線より上」は株価が50日線を上回る銘柄の割合です。O'Neilは、上位の業種から主導株を選ぶことを勧めています。タップするとその業種の通過銘柄を表示します。</p>`;
+}
+
+function perfView() {
+  const p = D.perf;
+  if (!p) return '';
+  const box = (k, label) => {
+    const x = p[k];
+    if (!x) return '';
+    return `<article class="card"><div class="row1"><span class="name" style="max-width:none">${label}</span></div>
+      <div class="perf"><div>平均<b>${sgn(x.mean)}</b></div><div>勝率（プラス）<b>${x.win}%</b></div>
+        <div>+20%以上<b>${x.big}%</b></div><div>-10%以下<b>${x.loss}%</b></div>
+        <div>対象銘柄全体（中央値の平均）<b>${sgn(x.univ)}</b></div><div>TOPIX（1306）<b>${sgn(x.bench)}</b></div></div>
+      <div class="meta" style="margin-top:6px">中央値 ${sgn(x.median)}・のべ${x.n.toLocaleString('ja-JP')}件（${x.dates}日分）</div></article>`;
+  };
+  return `<div class="sec">スクリーニングの成績（過去の通過銘柄のその後）</div>
+    ${box('h21', '通過した日から1か月後')}${box('h63', '通過した日から3か月後')}
+    <p class="note">${p.from.replaceAll('-', '/')}〜${p.to.replaceAll('-', '/')}の株価から、各日（1週ごと）にトレンドテンプレート全8条件を満たしていた銘柄を判定し直し、その後の騰落率を集計しています。今の構成銘柄で計算しているため、上場廃止などで消えた銘柄は含まれず、実際よりやや良く出ます。手数料・損切りは考慮していません。</p>`;
 }
 
 function marketView() {
@@ -313,6 +402,7 @@ function marketView() {
     <ul class="check">${p(m.above50, '50日線の上')}${p(m.above200, '200日線の上')}${p(m.ma50over200, '50日線 > 200日線')}
       ${p(m.distDays <= 4, `売り抜け日（25日間）：${m.distDays ?? '—'}日（5日以上で警戒）`)}</ul></article>
     <p class="note">CAN-SLIMの「M」です。売り抜け日は、指数が0.2%以上下げ、出来高が前日より増えた日です。O'Neilは、上昇トレンドのときだけ新規の買いを勧めています。</p>
+    ${perfView()}
     <div class="sec">通過銘柄数の推移</div>
     <article class="card">${Object.entries(HIST).slice(-30).map(([d, c]) => `<div class="meta" style="display:flex;gap:8px"><span style="width:44px">${d.slice(5).replace('-', '/')}</span><span style="flex:1;background:var(--accent-soft);border-radius:4px"><span style="display:block;height:12px;border-radius:4px;background:var(--accent);width:${Math.min(100, c.length / Math.max(...Object.values(HIST).map(x => x.length), 1) * 100)}%"></span></span><span style="width:32px;text-align:right">${c.length}</span></div>`).join('') || '<div class="empty">まだ記録がありません</div>'}</article>`;
 }
@@ -328,14 +418,23 @@ function render() {
   if (state.tab === 'pass') m.innerHTML = top3(pass) + list(pass);
   else if (state.tab === 'near') m.innerHTML = list(near);
   else if (state.tab === 'market') m.innerHTML = marketView();
+  else if (state.tab === 'sector') m.innerHTML = sectorView();
   else {
-    const q = state.q.trim();
-    const hits = q ? D.items.filter(i => i.code.startsWith(q) || i.name.includes(q)).slice(0, 40) : D.items.filter(i => stars.has(i.code));
-    m.innerHTML = `<input type="search" id="q" placeholder="銘柄名・コード" value="${esc(q)}">
-      ${q ? '' : `<div class="sec">★ウォッチ（${hits.length}）</div>`}
-      ${hits.map(card).join('') || `<div class="empty">${q ? '見つかりません（売買代金が少ない銘柄は対象外）' : 'カードの☆を押すとここに並びます'}</div>`}`;
+    // 入力欄は作り直さず、結果だけ書き換える（作り直すと日本語入力の変換やキーボードが切れるため）
+    m.innerHTML = `<input type="search" id="q" placeholder="銘柄名・コード" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><div id="hits"></div>`;
     const inp = $('#q');
-    inp.oninput = () => { state.q = inp.value; const p = inp.selectionStart; render(); const n = $('#q'); n.focus(); n.setSelectionRange(p, p); };
+    inp.value = state.q;
+    const update = () => {
+      state.q = inp.value;
+      const q = norm(state.q.trim());
+      const hits = q ? D.items.filter(i => norm(i.code).startsWith(q) || norm(i.name).includes(q)).slice(0, 40) : D.items.filter(i => stars.has(i.code));
+      $('#hits').innerHTML = `${q ? '' : `<div class="sec">★ウォッチ（${hits.length}）</div>`}
+        ${hits.map(card).join('') || `<div class="empty">${q ? '見つかりません（売買代金が少ない銘柄は対象外）' : 'カードの☆を押すとここに並びます'}</div>`}`;
+    };
+    inp.addEventListener('input', e => { if (!e.isComposing) update(); });
+    inp.addEventListener('compositionend', update);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+    update();
   }
   if (['pass', 'near'].includes(state.tab)) m.insertAdjacentHTML('beforeend',
     `<p class="note">トレンドテンプレートはミネルヴィニ、C・A・N・S・L・I・M は O'Neil の目安を機械的に当てはめたものです。株価・決算は Yahoo Finance の無料データ（非公式）で、誤りや欠けがあり得ます。VCP候補は値幅と出来高の縮小から自動判定したもので、チャートの目視確認が必要です。投資判断はご自身で行ってください。</p>`);
@@ -343,7 +442,30 @@ function render() {
   const mo = $('#more'); if (mo) mo.onclick = () => { state.limit += 60; render(); };
 }
 
+function toast(msg) {
+  let t = document.querySelector('.toast');
+  if (!t) { t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); document.body.append(t); }
+  t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800);
+}
+async function copyList(kind) {
+  const arr = state.current || [];
+  const text = arr.map(i => kind === 'name' ? `${i.code}\t${i.name}` : i.code).join('\n');
+  try { await navigator.clipboard.writeText(text); }
+  catch {   // 古いブラウザ向けの予備
+    const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.append(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove();
+    if (!ok) { toast('コピーできませんでした'); return; }
+  }
+  toast(`${arr.length}銘柄をコピーしました`);
+}
 document.addEventListener('click', e => {
+  const c = e.target.closest('[data-copy]');
+  if (c) { copyList(c.dataset.copy); return; }
+  const pr = e.target.closest('[data-period]');
+  if (pr) { state.secPeriod = pr.dataset.period; store.set('secPeriod', state.secPeriod); render(); return; }
+  const sc = e.target.closest('[data-sector]');
+  if (sc) { state.sector = sc.dataset.sector; state.tab = 'pass'; state.limit = 60; render(); scrollTo(0, 0); return; }
+  if (e.target.closest('[data-clearsector]')) { state.sector = null; render(); return; }
   const t = e.target.closest('[data-tab],[data-filter],[data-star]');
   if (!t) return;
   if (t.dataset.tab) { state.tab = t.dataset.tab; state.limit = 60; store.set('tab', state.tab); render(); scrollTo(0, 0); }
@@ -356,7 +478,7 @@ async function boot() {
     if (!a.ok) throw new Error(a.status);
     D = await a.json(); HIST = b.ok ? await b.json() : {};
     try { const x = await fetch('data/exclude.json', { cache: 'no-cache' }); EXCL = x.ok ? await x.json() : {}; } catch { EXCL = {}; }
-    D.items = D.items.filter(i => !EXCL[i.code]);   // TOBなどで除外した銘柄を外す
+    D.items = D.items.filter(i => !EXCL[i.code]);   // TOBなどで除外した銘柄を外す（data/exclude.json）
     render();
   } catch (e) {
     $('#sub').textContent = ''; $('#main').innerHTML = `<div class="empty">データを読み込めませんでした。最初の自動実行が終わるまでお待ちください。（${esc(e.message)}）</div>`;
