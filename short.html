@@ -54,6 +54,18 @@
   .alert b { display:block; font-size:15px; }
   .t-warn { background:var(--amberbg); color:var(--amber); font-weight:700; }
   .t-sec { background:var(--redbg); color:var(--red); }
+  .top3 { background:var(--card); border:2px solid var(--red); border-radius:12px; padding:10px 12px; margin-bottom:10px; }
+  .top3 h2 { font-size:14px; margin:0 0 6px; }
+  .top3 .r { display:flex; align-items:center; gap:8px; padding:7px 0; border-top:1px solid var(--line); }
+  .top3 .r:first-of-type { border-top:0; }
+  .top3 .rk { width:24px; height:24px; border-radius:50%; display:grid; place-items:center; font-weight:700; font-size:13px;
+              background:var(--red); color:#fff; flex:none; }
+  .top3 .bd { flex:1; min-width:0; }
+  .top3 .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .top3 .why { font-size:11.5px; color:var(--sub); }
+  .top3 .sc { text-align:right; font-size:11px; color:var(--sub); line-height:1.1; }
+  .top3 .sc b { display:block; font-size:18px; color:var(--fg); }
+  .top3 .warn { font-size:11.5px; color:var(--amber); margin-top:4px; }
   .srow { display:flex; align-items:center; gap:8px; font-size:13px; padding:3px 0; }
   .srow .nm { width:9.5em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .srow .bar { flex:1; height:10px; border-radius:5px; background:var(--line); overflow:hidden; }
@@ -69,6 +81,7 @@
 </header>
 <div class="meta" id="meta">読み込み中…</div>
 <div id="alert"></div>
+<div id="top3"></div>
 <div class="market" id="market"></div>
 <div class="tabs">
   <button data-f="zone" class="on">戻り売り</button>
@@ -181,6 +194,47 @@ function card(s, conds) {
   </div>`;
 }
 
+// 総合スコア（100点満点）。ステージ4と3→4移行の両方から、売りゾーンにいる銘柄だけを評価
+const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+function shortScore(s, tr) {
+  const lo = tr ? s.tr_entry_lo : s.entry_lo, hi = tr ? s.tr_entry_hi : s.entry_hi, stop = tr ? s.tr_stop : s.stop;
+  if (!(s.close >= lo && s.close <= hi)) return null;  // 入口の条件：売りゾーン内だけ
+  if (s.earnings_soon) return null;                     // 決算前は除外
+  const why = [tr ? "3→4移行" : "ステージ4"];
+  let sc = clamp((s.sector_stage4_pct ?? 0) / 80) * 25;         // 業種の弱さ（最大25）
+  if (s.c11) why.push(`弱い業種 ${s.sector_stage4_pct}%`);
+  if (s.ud_ratio != null) sc += clamp((1 - s.ud_ratio) / 0.4) * 20;  // 売り抜け（最大20）
+  if (s.c12) why.push(`売り抜け ${s.ud_ratio}`);
+  sc += tr ? clamp((s.rs_prev - s.rs) / 40) * 15 : clamp((30 - s.rs) / 30) * 15;  // RS（最大15）
+  if (tr) why.push(`RS ${s.rs_prev}→${s.rs}`);
+  sc += tr ? (s.tr_score >= 7 ? 15 : 7) : clamp((s.score - 9) / 3) * 15;           // 条件の達成度（最大15）
+  const risk = stop / s.close - 1;                              // 損切りまでの距離（最大15）
+  sc += clamp((0.10 - risk) / 0.06) * 15;
+  why.push(`損切りまで${(risk * 100).toFixed(1)}%`);
+  if (s.turnover_oku >= 20) sc += 5;                            // 売買代金（最大5）
+  if (tr ? s.tr_pass : s.all_pass) sc += 5;                     // 全条件クリア（最大5）
+  if (s.exdiv_soon) { sc -= 10; why.push("⚠権利落ち前"); }
+  return { s, tr, sc: Math.round(clamp(sc, 0, 100)), why };
+}
+
+function top3View() {
+  const all = [...(DATA.stocks || []).map((s) => shortScore(s, false)),
+               ...(DATA.transition || []).map((s) => shortScore(s, true))].filter(Boolean);
+  const seen = new Set();
+  const ranked = all.sort((a, b) => b.sc - a.sc).filter((x) => !seen.has(x.s.code) && seen.add(x.s.code)).slice(0, 3);
+  if (!ranked.length) return "";
+  const m = DATA.market || {};
+  const warn = m.cover_alert ? "⚠ 買い戻しサインが出ています。新規のショートは控えめに。"
+    : !m.ok_for_short ? `⚠ 地合いは「${m.label}」。本格的な下降トレンドではないので、売る量は小さめに。` : "";
+  return `<section class="top3"><h2>総合スコア トップ3</h2>
+    ${ranked.map(({ s, tr, sc, why }, k) => `<div class="r"><span class="rk">${k + 1}</span>
+      <div class="bd"><div class="nm">${s.name} <span class="code">${s.code}</span></div>
+      <div class="why">${why.join("・")}　売り ${yen(tr ? s.tr_entry_lo : s.entry_lo)}〜${yen(tr ? s.tr_entry_hi : s.entry_hi)} / 損切り ${yen(tr ? s.tr_stop : s.stop)}</div></div>
+      <span class="sc">点<b>${sc}</b></span></div>`).join("")}
+    ${warn ? `<div class="warn">${warn}</div>` : ""}
+    <div class="why" style="margin-top:4px">売りゾーンにいる銘柄だけを対象に、業種の弱さ・売り抜け・RS・条件の達成度・損切りまでの近さを点数化した機械的な順位です。決算前の銘柄は除外しています。</div></section>`;
+}
+
 function render() {
   if (!DATA) return;
   if (FILTER === "sector") { $("#list").innerHTML = sectorView(); return; }
@@ -210,6 +264,7 @@ fetch("data/short.json?t=" + Date.now()).then((r) => r.json()).then((d) => {
   $("#meta").textContent = `更新 ${d.updated}　対象 ${d.universe_size} 銘柄`;
   const m = d.market || {};
   $("#market").innerHTML = `地合い（TOPIX 1306）：<b>${m.label || "-"}</b>`;
+  $("#top3").innerHTML = top3View();
   if (m.cover_alert) $("#alert").innerHTML = `<div class="alert"><b>⚠ 買い戻しを検討</b>${(m.cover_reasons || []).join("<br>")}<br>
     地合いが反転し始めたサインです。ショート中なら利益確定・損切りの位置を引き上げ、新規のショートは控えめに。</div>`;
   render();

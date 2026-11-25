@@ -183,23 +183,25 @@ function plan(i) {
     <span class="st">${st}</span></div>`;
 }
 
-// 総合スコア（100点満点）：RS、CAN-SLIM、ピボットとの位置、VCP・ブレイクを合算
+// 総合スコア（100点満点）：値動きだけで評価する。CAN-SLIM（ファンダ）は点数に入れず「握力」として表示
+const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
 function longScore(i) {
+  if (!i.pivot || !i.close) return null;
+  const r = i.close / i.pivot - 1;
+  if (r < -0.03 || r > 0.05) return null;            // 入口の条件：ピボットの-3%〜+5%だけ
   const why = [];
-  let sc = (i.rs ?? 0) * 0.3;                        // RS（最大30点）
-  const cs = csCount(i); sc += cs * 5;               // CAN-SLIM（最大35点）
-  if (cs >= 5) why.push(`CAN-SLIM ${cs}文字`);
+  let sc = clamp(((i.rs ?? 70) - 70) / 29) * 35;     // RSの強さ（最大35）
   if ((i.rs ?? 0) >= 90) why.push(`RS ${i.rs}`);
-  if (i.pivot && i.close) {                          // 買い場の近さ（最大20点）
-    const r = i.close / i.pivot - 1;
-    if (r >= 0 && r <= 0.05) { sc += 20; why.push('買い場（ピボット超え）'); }
-    else if (r < 0 && r >= -0.05) { sc += 15; why.push(`ピボットまで${(-r * 100).toFixed(1)}%`); }
-    else if (r > 0.05) return null;                 // ピボット+5%超えは「伸びすぎ」：トップ3から除外
-  }
-  if (i.vcp) { sc += 10; why.push('VCP'); }
-  if (i.breakout) { sc += 10; why.push('ブレイク'); }
-  if (i.breakout && (i.volRatio ?? 0) >= 1.4) sc += 5;
-  return { sc: Math.max(0, Math.min(100, Math.round(sc))), why };
+  if (i.breakout && (i.volRatio ?? 0) >= 1.4) { sc += 20; why.push(`出来高ブレイク ${i.volRatio}倍`); }
+  else if (i.breakout) { sc += 5; why.push('ブレイク（出来高不足）'); }
+  else if (i.dryUp != null && i.dryUp <= 0.7) { sc += 10; why.push('出来高の細り'); }
+  if (i.vcp) { sc += 12; why.push('VCP'); }          // ベースの質（最大20）
+  const lastCon = (i.con || []).filter(v => v != null).slice(-1)[0];
+  if (lastCon != null && lastCon <= 10) { sc += 8; why.push(`値幅${lastCon.toFixed(0)}%に収縮`); }
+  sc += (1 - Math.abs(r) / 0.05) * 15;                // ピボットへの近さ（最大15）
+  why.push(r >= 0 ? '買い場（ピボット超え）' : `ピボットまで${(-r * 100).toFixed(1)}%`);
+  if (i.fromHigh >= -5) sc += 10;                     // 高値圏（最大10）
+  return { sc: Math.round(clamp(sc, 0, 100)), why };
 }
 
 function top3(items) {
@@ -210,10 +212,11 @@ function top3(items) {
   return `<section class="top3"><h2>総合スコア トップ3</h2>
     ${ranked.map(({ i, sc, why }, k) => `<div class="r"><span class="rk">${k + 1}</span>
       <div class="bd"><div class="nm">${esc(i.name)} <span class="code">${esc(i.code)}</span></div>
-      <div class="why">${why.join('・') || '—'}${i.pivot ? `　買い ${yen(i.pivot)} / 損切り ${yen(i.pivot * 0.93)}` : ''}</div></div>
+      <div class="why">${why.join('・') || '—'}　買い ${yen(i.pivot)} / 損切り ${yen(i.pivot * 0.93)}</div>
+      ${i.cs ? `<div class="why">握力（CAN-SLIM）：${csCount(i)}/7文字</div>` : ''}</div>
       <span class="sc">点<b>${sc}</b></span></div>`).join('')}
     ${ms !== '上昇トレンド' ? `<div class="warn">⚠ 地合いが「${esc(ms)}」です。オニールは上昇トレンド以外での新規買いを勧めていません。</div>` : ''}
-    <div class="why" style="margin-top:4px">RS・CAN-SLIM・買い場の近さ・VCP/ブレイクを点数化した機械的な順位です。ピボットから5%超上がった銘柄（伸びすぎ）は除外しています。</div></section>`;
+    <div class="why" style="margin-top:4px">値動き（RS・出来高・ベースの質・ピボットへの近さ・高値圏）だけを点数化した機械的な順位です。ピボットの-3%〜+5%にいる銘柄だけが対象で、CAN-SLIMは保有を続ける根拠（握力）として表示しています。</div></section>`;
 }
 
 function card(i) {
