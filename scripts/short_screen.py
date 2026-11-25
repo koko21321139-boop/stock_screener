@@ -105,11 +105,17 @@ def fetch_prices(codes: list[str], batch: int = 100) -> dict[str, pd.DataFrame]:
     tickers = [f"{c}.T" for c in codes]
     for i in range(0, len(tickers), batch):
         chunk = tickers[i:i + batch]
-        try:
-            df = yf.download(chunk, period="2y", auto_adjust=True, progress=False,
-                             group_by="ticker", threads=True)
-        except Exception as e:  # yfinance の一時的なエラーは飛ばす
-            print("download error:", e)
+        df = None
+        for attempt in range(3):  # 取得制限などの一時的なエラーは待ってやり直す
+            try:
+                df = yf.download(chunk, period="2y", auto_adjust=True, progress=False,
+                                 group_by="ticker", threads=True)
+                if df is not None and not df.empty:
+                    break
+            except Exception as e:
+                print("download error:", e)
+            time.sleep(30 * (attempt + 1))
+        if df is None or df.empty:
             continue
         for t in chunk:
             try:
@@ -309,6 +315,10 @@ def main():
     market = market_state(mkt_df, p) if mkt_df is not None else {"label": "取得失敗"}
 
     prices = fetch_prices(codes)
+    if len(prices) < len(codes) * 0.5:
+        # 半分以上取れなかったときは、前回の結果を残したまま止める
+        raise SystemExit(f"株価の取得に失敗しました（{len(prices)}/{len(codes)}銘柄）。"
+                         "Yahoo Finance の一時的な制限の可能性があります。時間をおいて再実行してください。")
     rows = []
     for code, df in prices.items():
         r = evaluate(df, p)
