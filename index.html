@@ -117,7 +117,7 @@ const store = {
 };
 const state = { tab: store.get('tab', 'pass'), filters: new Set(), sort: store.get('sort', 'rs'), q: '', limit: 60 };
 let stars = new Set(store.get('stars', []));
-let D = null, HIST = {};
+let D = null, HIST = {}, EXCL = {};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sgn = (v, d = 1, unit = '%') => v == null ? '—' : `<span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${v > 0 ? '+' : ''}${v.toFixed(d)}${unit}</span>`;
 
@@ -204,8 +204,13 @@ function rsLine(i) {
   const lead = high && c[c.length - 1] < priceMax * 0.99;   // RSラインが株価より先に高値更新
   return { high, lead };
 }
+// 値動きが止まった銘柄（TOB・MBO・株式交換などで株価が張り付いている可能性）
+const frozen = i => { const last = (i.con || []).filter(v => v != null).slice(-1)[0];
+  return (last != null && last <= 2) || (i.atrPct != null && i.atrPct <= 0.5); };
+
 function longScore(i) {
   if (!i.pivot || !i.close) return null;
+  if (frozen(i)) return null;                         // 値動き停止はトップ3から除外
   const r = i.close / i.pivot - 1;
   if (r < -0.03 || r > 0.05) return null;
   if ((i.rs ?? 0) < RS_MIN) return null;              // 足切り：RS 80以上
@@ -274,6 +279,7 @@ function card(i) {
   const isNew = Object.keys(HIST).length > 1 ? s === 1 : i.new;
   const tags = [isNew && '<span class="pill hot">新規通過</span>', i.breakout && '<span class="pill hot">ブレイク</span>',
     i.vcp && '<span class="pill ok">VCP候補</span>', i.newHigh && '<span class="pill">52週高値</span>',
+    frozen(i) && '<span class="pill hot">⚠ 値動き停止（TOB等？）</span>',
     i.pivot && i.close > i.pivot * 1.05 && '<span class="pill gray">伸びすぎ（押し目待ち）</span>',
     (() => { const rl = rsLine(i); return rl.lead ? '<span class="pill ok">RSライン先行高値</span>' : rl.high ? '<span class="pill ok">RSライン高値</span>' : ''; })(),
     s > 1 && `<span class="pill gray">${s}日連続</span>`, i.scale && `<span class="pill gray">${esc(i.scale)}</span>`].filter(Boolean).join('');
@@ -349,6 +355,8 @@ async function boot() {
     const [a, b] = await Promise.all([fetch('data/screen.json', { cache: 'no-cache' }), fetch('data/history.json', { cache: 'no-cache' })]);
     if (!a.ok) throw new Error(a.status);
     D = await a.json(); HIST = b.ok ? await b.json() : {};
+    try { const x = await fetch('data/exclude.json', { cache: 'no-cache' }); EXCL = x.ok ? await x.json() : {}; } catch { EXCL = {}; }
+    D.items = D.items.filter(i => !EXCL[i.code]);   // TOBなどで除外した銘柄を外す
     render();
   } catch (e) {
     $('#sub').textContent = ''; $('#main').innerHTML = `<div class="empty">データを読み込めませんでした。最初の自動実行が終わるまでお待ちください。（${esc(e.message)}）</div>`;

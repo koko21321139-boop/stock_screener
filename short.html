@@ -259,7 +259,12 @@ document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
   b.classList.add("on"); FILTER = b.dataset.f; render();
 });
 
-fetch("data/short.json?t=" + Date.now()).then((r) => r.json()).then((d) => {
+Promise.all([
+  fetch("data/short.json?t=" + Date.now()).then((r) => r.json()),
+  fetch("data/exclude.json?t=" + Date.now()).then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+]).then(([d, excl]) => {
+  d.stocks = (d.stocks || []).filter((s) => !excl[s.code]);          // TOBなどで除外した銘柄を外す
+  d.transition = (d.transition || []).filter((s) => !excl[s.code]);
   DATA = d;
   $("#meta").textContent = `更新 ${d.updated}　対象 ${d.universe_size} 銘柄`;
   const m = d.market || {};
